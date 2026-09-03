@@ -232,6 +232,7 @@ body {
 .wl-work-head-left { display: flex; align-items: center; gap: 8px; }
 .wl-work-name { font-size: 14.5px; font-weight: 600; }
 .wl-work-expected { font-weight: 400; color: var(--wl-text-muted); font-size: 12px; }
+.wl-work-tag { font-weight: 600; color: var(--wl-work); font-size: 11px; }
 
 .wl-update-img { width: 44px; height: 44px; object-fit: cover; border-radius: 2px; flex-shrink: 0; }
 
@@ -368,3 +369,22 @@ body {
 }
 .wl-queue-task { flex: 1; overflow-wrap: anywhere; }
 .wl-queue-work { color: var(--wl-text-muted); }
+
+/* tag management */
+.wl-tag-list { list-style: none; margin: 0 0 10px; padding: 0; }
+.wl-tag-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--wl-border); font-size: 13px; }
+.wl-tag-row:last-child { border-bottom: none; }
+.wl-tag-name { flex: 1; }
+.wl-tag-points { font-family: 'IBM Plex Mono', monospace; color: var(--wl-work); font-size: 11.5px; }
+
+/* image lightbox */
+.wl-lightbox-overlay {
+  position: fixed; inset: 0; background: rgba(10, 9, 7, 0.85);
+  display: flex; align-items: center; justify-content: center; z-index: 60; padding: 24px; cursor: zoom-out;
+}
+.wl-lightbox-img { max-width: min(90vw, 480px); max-height: 80vh; object-fit: contain; border-radius: 4px; }
+.wl-lightbox-close {
+  position: fixed; top: 18px; right: 18px; color: #fff; background: rgba(0, 0, 0, 0.4);
+  border-radius: 50%; padding: 8px;
+}
+.wl-lightbox-trigger { cursor: zoom-in; }
