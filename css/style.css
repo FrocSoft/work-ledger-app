@@ -307,3 +307,38 @@ body {
 
 .wl-icon { width: 15px; height: 15px; display: inline-block; vertical-align: -3px; }
 .wl-icon--sm { width: 12px; height: 12px; }
+.wl-grip { color: var(--wl-text-muted); cursor: grab; flex-shrink: 0; }
+
+/* work stats + cost log */
+.wl-work-stats { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 8px; }
+.wl-work-stats-cost { color: var(--wl-spend); }
+.wl-cost-log { list-style: none; margin: 8px 0 0; padding: 0; }
+.wl-cost-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; border-bottom: 1px solid var(--wl-border); }
+.wl-cost-row:last-child { border-bottom: none; }
+.wl-cost-label { flex: 1; color: var(--wl-text-muted); }
+.wl-cost-amount { font-family: 'IBM Plex Mono', monospace; color: var(--wl-spend); }
+
+/* auto-logged session updates */
+.wl-update-latest.is-auto { border: 1px dashed var(--wl-border); background: transparent; }
+
+/* tier target/actual price */
+.wl-tier-actual { color: var(--wl-text-muted); }
+
+/* drag-and-drop reordering */
+.wl-subtask-row--draggable { cursor: grab; }
+[data-drag-kind].is-dragging { opacity: 0.4; }
+
+/* continuous session queue */
+.wl-queue-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.wl-queue-item {
+  display: flex; align-items: center; gap: 8px; padding: 7px 0;
+  border-bottom: 1px solid var(--wl-border); font-size: 12.5px; cursor: grab;
+}
+.wl-queue-item:last-child { border-bottom: none; }
+.wl-queue-index {
+  font-family: 'IBM Plex Mono', monospace; color: var(--wl-text-muted); font-size: 11px;
+  min-width: 16px; flex-shrink: 0;
+}
+.wl-queue-task { flex: 1; overflow-wrap: anywhere; }
+.wl-queue-work { color: var(--wl-text-muted); }
+.wl-queue .wl-btn--full { margin-top: 10px; }
