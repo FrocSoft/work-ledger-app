@@ -206,8 +206,6 @@ let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
 const drafts = {
-  customSpendLabel: "",
-  customSpendCost: "",
   newWorkName: "",
   newWorkExpected: "",
   newWorkTag: "",
@@ -456,33 +454,6 @@ function reorderArray(arr, fromIndex, toIndex) {
   arr.splice(toIndex, 0, item);
 }
 
-// ---- actions: spend / savings ----
-// Deducts `cost` points. If today's pool doesn't cover it, the shortfall is
-// taken from savings right away instead of just showing a negative balance.
-function applySpendCost(label, cost) {
-  if (cost <= 0) return;
-  const { dailyPool, dailySpent } = computeToday();
-  const availableBefore = dailyPool - dailySpent;
-  const overflow = Math.max(0, cost - Math.max(0, availableBefore));
-  if (overflow > 0) state.savings -= overflow;
-  const day = todayKey();
-  const list = state.spendsByDate[day] || [];
-  state.spendsByDate[day] = [...list, { id: uid(), label, cost, at: Date.now() }];
-}
-function spend(label, cost) {
-  applySpendCost(label, cost);
-  persistAndRender();
-}
-function addCustomSpend() {
-  const cost = Number(drafts.customSpendCost);
-  if (!drafts.customSpendLabel.trim() || !cost || cost <= 0) return;
-  const label = drafts.customSpendLabel.trim();
-  if (!window.confirm(`"${label}"(-${cost}점)을 소비할까요?`)) return;
-  spend(label, cost);
-  drafts.customSpendLabel = "";
-  drafts.customSpendCost = "";
-}
-
 // ---- actions: spend timer (presets run continuously until stopped) ----
 // Starting charges the preset's configured points right away; running
 // longer keeps adding overage on top at a fixed 1 point per 10 minutes,
@@ -498,9 +469,9 @@ function startSpendTimer(label, cost) {
   applyActiveSpendTick();
   persistAndRender();
 }
-// Called periodically (see onTick) so points actually leave the balance as
-// the timer runs, not only once you press "끄기" — same overflow-to-savings
-// rule as applySpendCost, applied incrementally as the cost grows.
+// Called on start and periodically (see onTick) so points actually leave
+// the balance as the timer runs, not only once you press "끄기" — any
+// shortfall beyond today's available pool is taken from savings right away.
 function applyActiveSpendTick() {
   const active = state.activeSpend;
   if (!active) return false;
@@ -1173,9 +1144,9 @@ function renderSpendPresetButtons() {
         </button>`).join("")}
     </div>
     <div class="wl-field-row wl-field-row--tight">
-      <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="customSpendLabel" value="${escapeAttr(drafts.customSpendLabel)}" />
-      <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="customSpendCost" value="${escapeAttr(drafts.customSpendCost)}" />
-      <button class="wl-btn wl-btn--ghost" data-action="addCustomSpend">${ICONS.plus}</button>
+      <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="newPresetLabel" value="${escapeAttr(drafts.newPresetLabel)}" />
+      <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="newPresetCost" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetCost)}" />
+      <button class="wl-btn wl-btn--ghost" data-action="addSpendPreset">${ICONS.plus}</button>
     </div>`;
 }
 
@@ -1711,7 +1682,6 @@ function runAction(name, ds) {
     case "cancelBlock": cancelBlock(); break;
     case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
     case "stopSpendTimer": stopSpendTimer(); break;
-    case "addCustomSpend": addCustomSpend(); break;
     case "useOffDay": useOffDay(); break;
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
     case "addSpendPreset": addSpendPreset(); break;
@@ -1808,8 +1778,6 @@ function onRootInput(e) {
     return cleaned;
   };
   switch (key) {
-    case "customSpendLabel": drafts.customSpendLabel = value; break;
-    case "customSpendCost": drafts.customSpendCost = clampNumeric(); break;
     case "newWorkName": drafts.newWorkName = value; break;
     case "newWorkExpected": drafts.newWorkExpected = clampNumeric(); break;
     case "editWorkName": editingWorkDraft.name = value; break;
