@@ -1321,17 +1321,17 @@ function renderWorkManageCard(w) {
                 ${u.image ? `<img src="${u.image}" class="wl-update-img" alt="" />` : ""}
                 <div class="wl-session-log-body">
                   <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
-                  <div class="wl-session-log-meta">
-                    ${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}
-                    ${block ? (isEditingMin ? `
-                      · <input class="wl-inline-num" data-draft="editBlockMinutes" value="${escapeAttr(editingBlockMinutesDraft)}" inputmode="numeric" data-enter-action="saveEditBlockMinutes" />분
+                  <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
+                  ${block ? (isEditingMin ? `
+                    <div class="wl-session-log-duration is-editing">
+                      소요시간
+                      <input class="wl-inline-num" data-draft="editBlockMinutes" value="${escapeAttr(editingBlockMinutesDraft)}" inputmode="numeric" data-enter-action="saveEditBlockMinutes" />분
                       <button class="wl-icon-btn" data-action="saveEditBlockMinutes">${ICONS.check}</button>
                       <button class="wl-icon-btn" data-action="cancelEditBlockMinutes">${ICONS.x}</button>
-                    ` : `
-                      · ${blockMinutes(block)}분
-                      <button class="wl-icon-btn" data-action="editBlockMinutes" data-block="${block.id}">${ICONS.pencil}</button>
-                    `) : ""}
-                  </div>
+                    </div>` : `
+                    <button class="wl-session-log-duration" data-action="editBlockMinutes" data-block="${block.id}">
+                      ${ICONS.pencil} 소요시간 ${blockMinutes(block)}분 · 수정
+                    </button>`) : ""}
                 </div>
                 <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
               </li>`;
@@ -1559,6 +1559,11 @@ function renderImageLightbox() {
 
 function render() {
   const root = document.getElementById("app");
+  // innerHTML replacement below recreates the dashboard grid from scratch,
+  // which would otherwise reset its horizontal swipe position on mobile
+  // every time any action triggers a re-render.
+  const prevGrid = root.querySelector(".wl-dashboard-grid");
+  const prevScrollLeft = prevGrid ? prevGrid.scrollLeft : 0;
   let html = "";
   if (phase === "loading") html = renderLoading();
   else if (phase === "loadError") html = renderLoadError();
@@ -1566,6 +1571,10 @@ function render() {
   root.innerHTML = html;
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
+  if (prevScrollLeft) {
+    const newGrid = root.querySelector(".wl-dashboard-grid");
+    if (newGrid) newGrid.scrollLeft = prevScrollLeft;
+  }
   updateSaveIndicator();
 }
 
