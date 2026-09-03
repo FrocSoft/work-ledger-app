@@ -483,14 +483,18 @@ function addCustomSpend() {
 }
 
 // ---- actions: spend timer (presets run continuously until stopped) ----
+// Starting always costs the full listed rate right away (a flat "start-up"
+// charge); time spent beyond that keeps adding to it proportionally — the
+// "초과분" that accrues the longer the timer runs.
 function spendElapsedPoints(activeSpend, now) {
   const minutes = ((now != null ? now : Date.now()) - activeSpend.startedAt) / 60000;
-  return Math.round((minutes / 60) * activeSpend.costPerHour);
+  return activeSpend.costPerHour + Math.round((minutes / 60) * activeSpend.costPerHour);
 }
 function startSpendTimer(label, costPerHour) {
   if (state.activeSpend) return;
-  if (!window.confirm(`"${label}" 소비를 시작할까요? (시간당 -${costPerHour}점, 끄기 전까지 계속 소비돼요)`)) return;
+  if (!window.confirm(`"${label}" 소비를 시작할까요? (시작하면 바로 -${costPerHour}점, 이후 시간이 지날수록 초과분이 계속 더 깎여요)`)) return;
   state.activeSpend = { label, costPerHour, startedAt: Date.now(), appliedPoints: 0, logId: null };
+  applyActiveSpendTick();
   persistAndRender();
 }
 // Called periodically (see onTick) so points actually leave the balance as
