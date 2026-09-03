@@ -15,6 +15,13 @@ const DEFAULT_SPEND_PRESETS = [
   { id: "web", label: "웹서핑 1시간", cost: 3, icon: "web" },
 ];
 
+const DEFAULT_TAGS = [
+  { name: "제작", points: 3 },
+  { name: "개발", points: 2 },
+  { name: "사무", points: 1 },
+  { name: "습관", points: 1 },
+];
+
 const ICONS = {
   play: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>',
   square: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>',
@@ -63,9 +70,21 @@ function spentTotal(spends) {
   return (spends || []).reduce((a, s) => a + s.cost, 0);
 }
 function mergeLog(blocks, spends) {
-  const b = blocks.map((x) => ({ id: x.id, kind: "block", label: x.task, at: x.completedAt }));
+  const b = blocks.map((x) => ({ id: x.id, kind: "block", label: x.task, at: x.completedAt, points: blockPoints(x) }));
   const s = spends.map((x) => ({ id: x.id, kind: "spend", label: x.label, cost: x.cost, at: x.at }));
   return [...b, ...s].sort((a, c) => c.at - a.at);
+}
+function blockPoints(b) {
+  return b.points != null ? b.points : 1;
+}
+function dailyPoolFromBlocks(blocks) {
+  return blocks.slice(0, DAILY_CAP_BLOCKS).reduce((a, b) => a + blockPoints(b), 0);
+}
+function pointsForWork(workId) {
+  if (!workId) return 1;
+  const w = state.works.find((x) => x.id === workId);
+  const tag = w && w.tagId ? state.tags.find((t) => t.id === w.tagId) : null;
+  return tag ? tag.points : 1;
 }
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
@@ -115,11 +134,13 @@ function defaultState() {
     categories: [],
     activeBlock: null,
     queue: [],
+    tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
   };
 }
 
 // Migrates older saved shapes (tier.amount -> targetAmount/actualPrice, missing
-// works.costs/expectedSalePrice/queue) so existing GitHub-stored state keeps working.
+// works.costs/expectedSalePrice/queue/tagId, missing tags list) so existing
+// GitHub-stored state keeps working.
 function normalizeState(s) {
   s.works = (s.works || []).map((w) => ({
     ...w,
@@ -128,6 +149,7 @@ function normalizeState(s) {
     costs: w.costs || [],
     expectedSalePrice: w.expectedSalePrice != null ? w.expectedSalePrice : null,
     archived: w.archived === true,
+    tagId: w.tagId || null,
   }));
   s.categories = (s.categories || []).map((c) => ({
     ...c,
@@ -156,19 +178,25 @@ let lastMinuteCheck = 0;
 let editingCategoryId = null;
 let editingCategoryDraft = "";
 let editingWorkId = null;
-let editingWorkDraft = { name: "", expectedSalePrice: "" };
+let editingWorkDraft = { name: "", expectedSalePrice: "", tagId: "" };
 let dragSource = null;
 let costFormOpen = {};
 let expandedGoalCats = {};
 let collapsedWorks = {};
 let archivedSectionOpen = false;
+let editingTagId = null;
+let editingTagDraft = { name: "", points: "" };
+let lightboxImage = null;
 
 const drafts = {
   customSpendLabel: "",
   customSpendCost: "",
   newWorkName: "",
   newWorkExpected: "",
+  newWorkTag: "",
   newSubtask: {},
+  newTagName: "",
+  newTagPoints: "",
   pendingUpdate: { text: "", image: null, subtaskDone: false },
   newRevenueAmount: "",
   newCategoryName: "",
@@ -215,7 +243,7 @@ function reconcileSavings() {
     if (date === today || processed.has(date)) return;
     const blocks = state.blocksByDate[date] || [];
     const spends = state.spendsByDate[date] || [];
-    const leftover = Math.max(0, Math.min(blocks.length, DAILY_CAP_BLOCKS) - spentTotal(spends));
+    const leftover = Math.max(0, dailyPoolFromBlocks(blocks) - spentTotal(spends));
     addTo += leftover;
     newlyProcessed.push(date);
   });
@@ -303,11 +331,11 @@ function computeToday() {
   const today = todayKey();
   const todayBlocks = state.blocksByDate[today] || [];
   const todaySpends = state.spendsByDate[today] || [];
-  const dailyPool = Math.min(todayBlocks.length, DAILY_CAP_BLOCKS);
+  const dailyPool = dailyPoolFromBlocks(todayBlocks);
   const dailySpent = spentTotal(todaySpends);
   const dailyAvailable = dailyPool - dailySpent;
-  const overflowToday = Math.max(0, todayBlocks.length - DAILY_CAP_BLOCKS);
-  return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday };
+  const overflowPoints = todayBlocks.slice(DAILY_CAP_BLOCKS).reduce((a, b) => a + blockPoints(b), 0);
+  return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowPoints };
 }
 
 // ---- actions: timer + continuous block queue ----
@@ -347,15 +375,16 @@ function completeActiveBlock() {
   if (!state.activeBlock) return;
   const day = todayKey();
   const blocks = state.blocksByDate[day] || [];
+  const points = pointsForWork(state.activeBlock.workId);
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
-    completedAt: Date.now(),
+    completedAt: Date.now(), points,
   };
   const newBlocks = [...blocks, newBlock];
   const overflow = newBlocks.length > DAILY_CAP_BLOCKS;
   state.blocksByDate[day] = newBlocks;
-  if (overflow) state.savings += 1;
+  if (overflow) state.savings += points;
   drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
@@ -416,9 +445,13 @@ function addWork() {
   const name = drafts.newWorkName.trim();
   if (!name) return;
   const expectedSalePrice = drafts.newWorkExpected ? Number(drafts.newWorkExpected) : null;
-  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice, archived: false });
+  state.works.push({
+    id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice, archived: false,
+    tagId: drafts.newWorkTag || null,
+  });
   drafts.newWorkName = "";
   drafts.newWorkExpected = "";
+  drafts.newWorkTag = "";
   persistAndRender();
 }
 function removeWork(id) {
@@ -429,7 +462,10 @@ function startEditWork(workId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
   editingWorkId = workId;
-  editingWorkDraft = { name: w.name, expectedSalePrice: w.expectedSalePrice != null ? String(w.expectedSalePrice) : "" };
+  editingWorkDraft = {
+    name: w.name, expectedSalePrice: w.expectedSalePrice != null ? String(w.expectedSalePrice) : "",
+    tagId: w.tagId || "",
+  };
   render();
 }
 function cancelEditWork() { editingWorkId = null; render(); }
@@ -460,6 +496,7 @@ function saveEditWork() {
   if (!name) return;
   w.name = name;
   w.expectedSalePrice = editingWorkDraft.expectedSalePrice ? Number(editingWorkDraft.expectedSalePrice) : null;
+  w.tagId = editingWorkDraft.tagId || null;
   editingWorkId = null;
   persistAndRender();
 }
@@ -493,6 +530,13 @@ function reorderSubtasks(workId, fromIndex, toIndex) {
 }
 function workCostTotal(w) {
   return (w.costs || []).reduce((a, c) => a + c.amount, 0);
+}
+function workTag(w) {
+  return w.tagId ? state.tags.find((t) => t.id === w.tagId) : null;
+}
+function workTagBadge(w) {
+  const tag = workTag(w);
+  return tag ? ` <span class="wl-work-tag">${escapeHtml(tag.name)} · ${tag.points}점</span>` : "";
 }
 function workSessionStats(workId) {
   let count = 0;
@@ -625,6 +669,51 @@ function removeTier(catId, tierId) {
 }
 function toggleGoalCategoryExpand(catId) {
   expandedGoalCats[catId] = !expandedGoalCats[catId];
+  render();
+}
+
+// ---- actions: tags ----
+function addTag() {
+  const name = drafts.newTagName.trim();
+  const points = Number(drafts.newTagPoints);
+  if (!name || !points || points <= 0) return;
+  state.tags.push({ id: uid(), name, points });
+  drafts.newTagName = "";
+  drafts.newTagPoints = "";
+  persistAndRender();
+}
+function removeTag(tagId) {
+  state.tags = state.tags.filter((t) => t.id !== tagId);
+  state.works.forEach((w) => { if (w.tagId === tagId) w.tagId = null; });
+  persistAndRender();
+}
+function startEditTag(tagId) {
+  const t = state.tags.find((x) => x.id === tagId);
+  if (!t) return;
+  editingTagId = tagId;
+  editingTagDraft = { name: t.name, points: String(t.points) };
+  render();
+}
+function cancelEditTag() { editingTagId = null; render(); }
+function saveEditTag() {
+  const t = state.tags.find((x) => x.id === editingTagId);
+  if (!t) return;
+  const name = editingTagDraft.name.trim();
+  const points = Number(editingTagDraft.points);
+  if (!name || !points || points <= 0) return;
+  t.name = name;
+  t.points = points;
+  editingTagId = null;
+  persistAndRender();
+}
+
+// ---- actions: image lightbox ----
+function openImageLightbox(src, alt) {
+  lightboxImage = { src, alt: alt || "" };
+  render();
+}
+function closeImageLightbox() {
+  lightboxImage = null;
   render();
 }
 
@@ -845,7 +934,7 @@ function renderProjectStatusRow(w) {
   const costOpen = !!costFormOpen[w.id];
   return `
     <div class="wl-project-row">
-      <div class="wl-work-name">${escapeHtml(w.name)}</div>
+      <div class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}</div>
       ${latest
         ? `<div class="wl-project-status">
             ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
@@ -890,10 +979,10 @@ function renderProjectsStatusColumn() {
 
 // ---- render: column 3 — today summary ----
 function renderTodaySummaryColumn() {
-  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday } = computeToday();
+  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowPoints } = computeToday();
   return `
     <section class="wl-ledger-strip">
-      ${figure("오늘 적립", `${dailyPool}${overflowToday ? ` +${overflowToday}` : ""}`)}
+      ${figure("오늘 적립", `${dailyPool}${overflowPoints ? ` +${overflowPoints}` : ""}`)}
       ${figure("오늘 사용", dailySpent)}
       ${figure("오늘 가용", Math.max(0, dailyAvailable), "work")}
       ${figure("저축", state.savings, "save")}
@@ -922,7 +1011,7 @@ function renderTodaySummaryColumn() {
           <li class="wl-log-row wl-log-row--${item.kind}">
             <span class="wl-log-time">${formatTime(item.at)}</span>
             <span class="wl-log-label">${escapeHtml(item.label)}</span>
-            <span class="wl-log-points">${item.kind === "block" ? "+1" : `-${item.cost}`}</span>
+            <span class="wl-log-points">${item.kind === "block" ? `+${item.points}` : `-${item.cost}`}</span>
           </li>`).join("")}
       </ul>
     </section>`;
@@ -979,7 +1068,7 @@ function renderGoalTierPreview(t, totalRevenue) {
   const pct = unlocked ? 100 : Math.min(100, Math.round((totalRevenue / t.targetAmount) * 100));
   return `
     <div class="wl-goal-next">
-      ${t.image ? `<img src="${t.image}" class="wl-goal-next-img" alt="${escapeAttr(t.label)}" />` : `<div class="wl-goal-next-img wl-goal-next-img--empty">${ICONS.sparkles}</div>`}
+      ${t.image ? `<img src="${t.image}" class="wl-goal-next-img wl-lightbox-trigger" alt="${escapeAttr(t.label)}" />` : `<div class="wl-goal-next-img wl-goal-next-img--empty">${ICONS.sparkles}</div>`}
       <div class="wl-goal-next-body">
         <div class="wl-goal-next-label">${escapeHtml(t.label)}${unlocked ? `<span class="wl-goal-next-badge">구매 가능</span>` : ""}</div>
         <div class="wl-progress">
@@ -1064,12 +1153,16 @@ function renderWorkManageCard(w) {
           <div class="wl-field-row wl-field-row--tight wl-field-row--wrap" style="flex:1;margin:0">
             <input class="wl-input wl-input--sm" data-draft="editWorkName" value="${escapeAttr(editingWorkDraft.name)}" placeholder="할일 이름" data-enter-action="saveEditWork" />
             <input class="wl-input wl-input--num" data-draft="editWorkExpected" value="${escapeAttr(editingWorkDraft.expectedSalePrice)}" placeholder="판매예상" inputmode="numeric" data-enter-action="saveEditWork" />
+            <select class="wl-select" data-select="editWorkTag">
+              <option value="">태그 없음</option>
+              ${state.tags.map((t) => `<option value="${t.id}" ${editingWorkDraft.tagId === t.id ? "selected" : ""}>${escapeHtml(t.name)} (${t.points}점)</option>`).join("")}
+            </select>
             <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
             <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
           </div>` : `
           <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
             <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
-            <span class="wl-work-name">${escapeHtml(w.name)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</span>
+            <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</span>
           </button>
           <div>
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
@@ -1141,16 +1234,53 @@ function renderWorksManage() {
   return `
     <div class="wl-body">
       <section class="wl-card">
-        <div class="wl-field-row">
+        <div class="wl-field-row wl-field-row--wrap">
           <input class="wl-input" placeholder="새 할일 이름" data-draft="newWorkName" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkName)}" />
           <input class="wl-input wl-input--num" placeholder="판매예상(선택)" inputmode="numeric" data-draft="newWorkExpected" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkExpected)}" />
+          <select class="wl-select" data-select="newWorkTag">
+            <option value="">태그 없음</option>
+            ${state.tags.map((t) => `<option value="${t.id}" ${drafts.newWorkTag === t.id ? "selected" : ""}>${escapeHtml(t.name)} (${t.points}점)</option>`).join("")}
+          </select>
           <button class="wl-btn wl-btn--primary" data-action="addWork">${ICONS.plus} 추가</button>
         </div>
       </section>
       ${active.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : ""}
       ${active.map(renderWorkManageCard).join("")}
       ${archived.length > 0 ? renderArchivedWorksSection(archived) : ""}
+      ${renderTagManageSection()}
     </div>`;
+}
+
+function renderTagRow(t) {
+  if (editingTagId === t.id) {
+    return `
+      <li class="wl-tag-row">
+        <input class="wl-input wl-input--sm" data-draft="editTagName" value="${escapeAttr(editingTagDraft.name)}" data-enter-action="saveEditTag" />
+        <input class="wl-input wl-input--num" data-draft="editTagPoints" value="${escapeAttr(editingTagDraft.points)}" inputmode="numeric" data-enter-action="saveEditTag" />
+        <button class="wl-icon-btn" data-action="saveEditTag">${ICONS.check}</button>
+        <button class="wl-icon-btn" data-action="cancelEditTag">${ICONS.x}</button>
+      </li>`;
+  }
+  return `
+    <li class="wl-tag-row">
+      <span class="wl-tag-name">${escapeHtml(t.name)}</span>
+      <span class="wl-tag-points">${t.points}점</span>
+      <button class="wl-icon-btn" data-action="editTag" data-tag="${t.id}">${ICONS.pencil}</button>
+      <button class="wl-icon-btn" data-action="removeTag" data-tag="${t.id}">${ICONS.x}</button>
+    </li>`;
+}
+
+function renderTagManageSection() {
+  return `
+    <section class="wl-card">
+      <div class="wl-card-title">태그 관리 · 블록 완료 점수</div>
+      ${state.tags.length === 0 ? `<div class="wl-empty">등록된 태그가 없어요.</div>` : `<ul class="wl-tag-list">${state.tags.map(renderTagRow).join("")}</ul>`}
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--sm" placeholder="태그 이름" data-draft="newTagName" value="${escapeAttr(drafts.newTagName)}" />
+        <input class="wl-input wl-input--num" placeholder="점수" inputmode="numeric" data-draft="newTagPoints" data-enter-action="addTag" value="${escapeAttr(drafts.newTagPoints)}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addTag">${ICONS.plus}</button>
+      </div>
+    </section>`;
 }
 
 // ---- render: goals-manage tab ----
@@ -1287,6 +1417,14 @@ function renderSettingsOverlay() {
     </div>`;
 }
 
+function renderImageLightbox() {
+  return `
+    <div class="wl-lightbox-overlay" data-action="closeLightbox">
+      <img src="${lightboxImage.src}" alt="${escapeAttr(lightboxImage.alt)}" class="wl-lightbox-img" />
+      <button class="wl-icon-btn wl-lightbox-close" data-action="closeLightbox">${ICONS.x}</button>
+    </div>`;
+}
+
 function render() {
   const root = document.getElementById("app");
   let html = "";
@@ -1295,6 +1433,7 @@ function render() {
   else if (state) html = renderShell();
   root.innerHTML = html;
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
+  if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   updateSaveIndicator();
 }
 
@@ -1351,10 +1490,22 @@ function runAction(name, ds) {
     case "removeFromQueue": removeFromQueue(ds.id); break;
     case "startQueue": startQueue(); break;
     case "toggleGoalCategory": toggleGoalCategoryExpand(ds.cat); break;
+    case "addTag": addTag(); break;
+    case "removeTag": removeTag(ds.tag); break;
+    case "editTag": startEditTag(ds.tag); break;
+    case "saveEditTag": saveEditTag(); break;
+    case "cancelEditTag": cancelEditTag(); break;
+    case "closeLightbox": closeImageLightbox(); break;
   }
 }
 
 function onRootClick(e) {
+  const trigger = e.target.closest(".wl-lightbox-trigger");
+  if (trigger) {
+    e.preventDefault();
+    openImageLightbox(trigger.src, trigger.alt);
+    return;
+  }
   const el = e.target.closest("[data-action]");
   if (!el) return;
   e.preventDefault();
@@ -1387,6 +1538,10 @@ function onRootInput(e) {
     case "editWorkName": editingWorkDraft.name = value; break;
     case "editWorkExpected": editingWorkDraft.expectedSalePrice = clampNumeric(); break;
     case "newSubtask": drafts.newSubtask[el.dataset.work] = value; break;
+    case "newTagName": drafts.newTagName = value; break;
+    case "newTagPoints": drafts.newTagPoints = clampNumeric(); break;
+    case "editTagName": editingTagDraft.name = value; break;
+    case "editTagPoints": editingTagDraft.points = clampNumeric(); break;
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
@@ -1451,6 +1606,8 @@ async function onRootChange(e) {
     const kind = select.dataset.select;
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
+    if (kind === "newWorkTag") { drafts.newWorkTag = select.value; }
+    if (kind === "editWorkTag") { editingWorkDraft.tagId = select.value; }
   }
 }
 
