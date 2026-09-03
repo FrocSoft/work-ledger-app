@@ -30,6 +30,7 @@ const ICONS = {
   image: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"></path><path d="M21 3l-7 7"></path><rect x="3" y="6" width="14" height="15" rx="2"></rect><circle cx="9" cy="12" r="1.5"></circle><path d="M4 20l4-4 3 3 3-4 3 3"></path></svg>',
   sparkles: '<svg class="wl-icon" style="width:22px;height:22px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"></path><path d="M19 15l.7 2.1L22 18l-2.3.9L19 21l-.7-2.1L16 18l2.3-.9L19 15z"></path></svg>',
   gear: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
+  grip: '<svg class="wl-icon wl-icon--sm wl-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
 };
 
 // ---- utils ----
@@ -122,7 +123,26 @@ function defaultState() {
     revenueLog: [],
     categories: [],
     activeBlock: null,
+    queue: [],
   };
+}
+
+// Migrates older saved shapes (tier.amount -> targetAmount/actualPrice, missing
+// works.costs/queue) so existing GitHub-stored state keeps working.
+function normalizeState(s) {
+  s.works = (s.works || []).map((w) => ({
+    ...w, subtasks: w.subtasks || [], updates: w.updates || [], costs: w.costs || [],
+  }));
+  s.categories = (s.categories || []).map((c) => ({
+    ...c,
+    tiers: (c.tiers || []).map((t) => {
+      if (t.targetAmount != null) return t;
+      const amt = t.amount != null ? t.amount : 0;
+      return { ...t, targetAmount: amt, actualPrice: amt };
+    }),
+  }));
+  s.queue = s.queue || [];
+  return s;
 }
 
 // ---- module state ----
@@ -150,6 +170,8 @@ const drafts = {
   newRevenueAmount: "",
   newCategoryName: "",
   newTier: {},
+  newCost: {},
+  queueDraft: { task: "", workId: "", subtaskId: "" },
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -169,7 +191,7 @@ async function boot() {
   render();
   try {
     const { data, sha: s } = await fetchState();
-    state = data ? Object.assign(defaultState(), data) : defaultState();
+    state = normalizeState(data ? Object.assign(defaultState(), data) : defaultState());
     sha = s;
     phase = "ready";
     reconcileSavings();
@@ -216,7 +238,7 @@ function onTick() {
     if (Date.now() - startedAt >= durationMs) {
       if (p === "work") completeActiveBlock();
       else {
-        state.activeBlock = null;
+        startNextQueueItemOrEnd();
         persistAndRender();
       }
       return;
@@ -297,6 +319,22 @@ function startBlock() {
   persistAndRender();
 }
 
+// Logs a completed work session onto its linked work as an auto-generated
+// update, so finishing a block visibly moves the linked task forward.
+function logWorkSession(workId, subtaskId, task, at) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  const subtask = subtaskId ? w.subtasks.find((s) => s.id === subtaskId) : null;
+  w.updates = w.updates || [];
+  w.updates.unshift({
+    id: uid(),
+    text: `${subtask ? `[${subtask.name}] ` : ""}"${task}" 블록 완료 (${WORK_MIN}분)`,
+    image: null,
+    at,
+    auto: true,
+  });
+}
+
 function completeActiveBlock() {
   if (!state.activeBlock) return;
   const day = todayKey();
@@ -310,13 +348,49 @@ function completeActiveBlock() {
   const overflow = newBlocks.length > DAILY_CAP_BLOCKS;
   state.blocksByDate[day] = newBlocks;
   if (overflow) state.savings += 1;
+  if (newBlock.workId) logWorkSession(newBlock.workId, newBlock.subtaskId, newBlock.task, newBlock.completedAt);
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now() };
   persistAndRender();
 }
 
 function finishEarly() { completeActiveBlock(); }
-function skipBreak() { state.activeBlock = null; persistAndRender(); }
+function skipBreak() { startNextQueueItemOrEnd(); persistAndRender(); }
 function cancelBlock() { state.activeBlock = null; persistAndRender(); }
+
+// ---- actions: session queue (continuous blocks) ----
+function startNextQueueItemOrEnd() {
+  if (state.queue.length > 0) {
+    const next = state.queue.shift();
+    state.activeBlock = {
+      id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
+      startedAt: Date.now(), phase: "work",
+    };
+  } else {
+    state.activeBlock = null;
+  }
+}
+function addToQueue() {
+  const task = drafts.queueDraft.task.trim();
+  if (!task) return;
+  state.queue.push({
+    id: uid(), task, workId: drafts.queueDraft.workId || null, subtaskId: drafts.queueDraft.subtaskId || null,
+  });
+  drafts.queueDraft = { task: "", workId: "", subtaskId: "" };
+  persistAndRender();
+}
+function removeFromQueue(id) {
+  state.queue = state.queue.filter((q) => q.id !== id);
+  persistAndRender();
+}
+function startQueue() {
+  if (state.activeBlock || state.queue.length === 0) return;
+  startNextQueueItemOrEnd();
+  persistAndRender();
+}
+function reorderArray(arr, fromIndex, toIndex) {
+  const [item] = arr.splice(fromIndex, 1);
+  arr.splice(toIndex, 0, item);
+}
 
 // ---- actions: spend / savings ----
 function spend(label, cost) {
@@ -345,7 +419,7 @@ function useOffDay() {
 function addWork() {
   const name = drafts.newWorkName.trim();
   if (!name) return;
-  state.works.push({ id: uid(), name, subtasks: [], updates: [] });
+  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [] });
   drafts.newWorkName = "";
   persistAndRender();
 }
@@ -373,6 +447,39 @@ function removeSubtask(workId, subId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
   w.subtasks = w.subtasks.filter((s) => s.id !== subId);
+  persistAndRender();
+}
+function reorderSubtasks(workId, fromIndex, toIndex) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w || fromIndex === toIndex) return;
+  reorderArray(w.subtasks, fromIndex, toIndex);
+  persistAndRender();
+}
+function workCostTotal(w) {
+  return (w.costs || []).reduce((a, c) => a + c.amount, 0);
+}
+function workSessionStats(workId) {
+  let count = 0;
+  Object.values(state.blocksByDate).forEach((blocks) => {
+    (blocks || []).forEach((b) => { if (b.workId === workId) count += 1; });
+  });
+  return { count, minutes: count * WORK_MIN };
+}
+function addWorkCost(workId) {
+  const draft = drafts.newCost[workId] || {};
+  const amount = Number(draft.amount);
+  if (!amount || amount <= 0) return;
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.costs = w.costs || [];
+  w.costs.push({ id: uid(), amount, label: (draft.label || "").trim(), at: Date.now() });
+  drafts.newCost[workId] = { label: "", amount: "" };
+  persistAndRender();
+}
+function removeWorkCost(workId, costId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.costs = (w.costs || []).filter((c) => c.id !== costId);
   persistAndRender();
 }
 function addWorkUpdate(workId) {
@@ -418,12 +525,13 @@ function removeCategory(id) {
 }
 function addTier(catId) {
   const draft = drafts.newTier[catId] || {};
-  const amount = Number(draft.amount);
-  if (!draft.label || !draft.label.trim() || !amount || amount <= 0) return;
+  const targetAmount = Number(draft.targetAmount);
+  const actualPrice = draft.actualPrice ? Number(draft.actualPrice) : targetAmount;
+  if (!draft.label || !draft.label.trim() || !targetAmount || targetAmount <= 0) return;
   const c = state.categories.find((x) => x.id === catId);
   if (!c) return;
-  c.tiers.push({ id: uid(), label: draft.label.trim(), amount, image: draft.image || null });
-  drafts.newTier[catId] = { label: "", amount: "", image: null };
+  c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
+  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
   persistAndRender();
 }
 function removeTier(catId, tierId) {
@@ -589,6 +697,51 @@ function updateTimerDisplay() {
   barEl.style.width = `${pct}%`;
 }
 
+function renderQueueItem(item, idx) {
+  const w = item.workId ? state.works.find((x) => x.id === item.workId) : null;
+  return `
+    <li class="wl-queue-item" draggable="true" data-drag-kind="queue" data-index="${idx}">
+      ${ICONS.grip}
+      <span class="wl-queue-index">${idx + 1}</span>
+      <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml(w.name)}</span>` : ""}</span>
+      <button class="wl-icon-btn" data-action="removeFromQueue" data-id="${item.id}">${ICONS.x}</button>
+    </li>`;
+}
+
+function renderQueueSection() {
+  const draft = drafts.queueDraft;
+  const selectedWork = state.works.find((w) => w.id === draft.workId);
+  return `
+    <div class="wl-queue">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">연속 세션 대기열</div>
+        ${state.queue.length > 0 ? `<span class="wl-hint">${state.queue.length}개 대기 중</span>` : ""}
+      </div>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--sm" placeholder="다음에 할 일" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addToQueue">${ICONS.plus}</button>
+      </div>
+      ${state.works.length > 0 ? `
+        <div class="wl-field-row wl-field-row--tight">
+          <select class="wl-select" data-select="queueWork">
+            <option value="">할일 연결 안 함</option>
+            ${state.works.map((w) => `<option value="${w.id}" ${draft.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
+          </select>
+          ${selectedWork && selectedWork.subtasks.length > 0 ? `
+            <select class="wl-select" data-select="queueSub">
+              <option value="">하위 할일 선택 안 함</option>
+              ${selectedWork.subtasks.map((st) => `<option value="${st.id}" ${draft.subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
+            </select>` : ""}
+        </div>` : ""}
+      ${state.queue.length > 0 ? `
+        <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
+        ${!state.activeBlock
+          ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} 대기열 시작 (${state.queue.length}개)</button>`
+          : `<div class="wl-hint">휴식이 끝나면 자동으로 다음 세션이 시작돼요.</div>`}
+      ` : ""}
+    </div>`;
+}
+
 function renderTodayColumn() {
   const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday } = computeToday();
   const active = state.activeBlock;
@@ -605,6 +758,9 @@ function renderTodayColumn() {
             ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, startedAt: active.startedAt, isBreak: false }
             : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, startedAt: active.startedAt, isBreak: true })
         : renderStartForm()}
+    </section>
+    <section class="wl-card">
+      ${renderQueueSection()}
     </section>
     <section class="wl-card">
       <div class="wl-card-title">소비</div>
@@ -670,9 +826,17 @@ function renderWorkProgressBlock(w) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const latest = (w.updates || [])[0];
   const draft = drafts.newUpdate[w.id] || {};
+  const costDraft = drafts.newCost[w.id] || {};
+  const stats = workSessionStats(w.id);
+  const costTotal = workCostTotal(w);
   return `
     <div class="wl-work-block">
       <div class="wl-work-name">${escapeHtml(w.name)}</div>
+      ${stats.count > 0 || costTotal > 0 ? `
+        <div class="wl-work-stats">
+          ${stats.count > 0 ? `<span>완료 세션 ${stats.count}회 · ${Math.round(stats.minutes / 60 * 10) / 10}시간</span>` : ""}
+          ${costTotal > 0 ? `<span class="wl-work-stats-cost">누적 비용 ${costTotal.toLocaleString()}원</span>` : ""}
+        </div>` : ""}
       ${total > 0 ? `
         <div class="wl-progress">
           <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
@@ -686,12 +850,12 @@ function renderWorkProgressBlock(w) {
             </li>`).join("")}
         </ul>` : ""}
       ${latest ? `
-        <div class="wl-update-latest">
+        <div class="wl-update-latest ${latest.auto ? "is-auto" : ""}">
           ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
           <div class="wl-update-body">
-            ${latest.text ? `<div class="wl-update-text">${escapeHtml(latest.text)}</div>` : ""}
+            ${latest.text ? `<div class="wl-update-text">${latest.auto ? `${ICONS.square} ` : ""}${escapeHtml(latest.text)}</div>` : ""}
             <div class="wl-update-meta">
-              <span>${escapeHtml(formatRelative(latest.at))}</span>
+              <span>${latest.auto ? "자동 기록 · " : ""}${escapeHtml(formatRelative(latest.at))}</span>
               <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${latest.id}">${ICONS.x}</button>
             </div>
           </div>
@@ -700,6 +864,20 @@ function renderWorkProgressBlock(w) {
         <input class="wl-input wl-input--sm" placeholder="새 업데이트" data-draft="updateText" data-work="${w.id}" data-enter-action="addWorkUpdate" value="${escapeAttr(draft.text || "")}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickUpdateImage", clearAction: "clearUpdateImage", work: w.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addWorkUpdate" data-work="${w.id}">${ICONS.plus}</button>
+      </div>
+      ${(w.costs || []).length > 0 ? `
+        <ul class="wl-cost-log">
+          ${w.costs.map((c) => `
+            <li class="wl-cost-row">
+              <span class="wl-cost-label">${escapeHtml(c.label || "비용")}</span>
+              <span class="wl-cost-amount">${c.amount.toLocaleString()}원</span>
+              <button class="wl-icon-btn" data-action="removeWorkCost" data-work="${w.id}" data-cost="${c.id}">${ICONS.x}</button>
+            </li>`).join("")}
+        </ul>` : ""}
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="이 할일에 쓴 비용" data-draft="costLabel" data-work="${w.id}" value="${escapeAttr(costDraft.label || "")}" />
+        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.plus}</button>
       </div>
     </div>`;
 }
@@ -722,13 +900,14 @@ function renderWorksProgressPanel() {
 }
 
 function renderTierRow(t, totalRevenue, showRemove, catId) {
-  const unlocked = totalRevenue >= t.amount;
+  const unlocked = totalRevenue >= t.targetAmount;
+  const showActual = t.actualPrice != null && t.actualPrice !== t.targetAmount;
   return `
     <li class="wl-tier-row ${unlocked ? "is-unlocked" : ""}">
       ${t.image ? `<img src="${t.image}" class="wl-thumb" alt="" />` : ""}
       ${ICONS.chevron}
       <span class="wl-tier-label">${escapeHtml(t.label)}</span>
-      <span class="wl-tier-amount">${t.amount.toLocaleString()}원</span>
+      <span class="wl-tier-amount">목표 ${t.targetAmount.toLocaleString()}원${showActual ? `<span class="wl-tier-actual"> · 실가 ${t.actualPrice.toLocaleString()}원</span>` : ""}</span>
       <span class="wl-tier-status">${unlocked ? "구매 가능" : "미도달"}</span>
       ${showRemove ? `<button class="wl-icon-btn" data-action="removeTier" data-cat="${catId}" data-tier="${t.id}">${ICONS.x}</button>` : ""}
     </li>`;
@@ -737,8 +916,8 @@ function renderTierRow(t, totalRevenue, showRemove, catId) {
 function renderGoalsColumn() {
   const totalRevenue = state.revenueLog.reduce((a, r) => a + r.amount, 0);
   const allTiers = state.categories.flatMap((c) => c.tiers.map((t) => ({ ...t, categoryName: c.name })));
-  const nextGoal = allTiers.filter((t) => t.amount > totalRevenue).sort((a, b) => a.amount - b.amount)[0];
-  const goalPct = nextGoal ? Math.min(100, Math.round((totalRevenue / nextGoal.amount) * 100)) : 0;
+  const nextGoal = allTiers.filter((t) => t.targetAmount > totalRevenue).sort((a, b) => a.targetAmount - b.targetAmount)[0];
+  const goalPct = nextGoal ? Math.min(100, Math.round((totalRevenue / nextGoal.targetAmount) * 100)) : 0;
   return `
     <section class="wl-card wl-card--center">
       <div class="wl-figure-label">누적 수익</div>
@@ -758,7 +937,7 @@ function renderGoalsColumn() {
             <div class="wl-progress-bar"><div class="wl-progress-fill is-sales" style="width:${goalPct}%"></div></div>
             <span class="wl-progress-label">${goalPct}%</span>
           </div>
-          <div class="wl-hint">${(nextGoal.amount - totalRevenue).toLocaleString()}원 남음</div>
+          <div class="wl-hint">${(nextGoal.targetAmount - totalRevenue).toLocaleString()}원 남음</div>
         </div>
       </section>` : ""}
     <section class="wl-card">
@@ -770,7 +949,7 @@ function renderGoalsColumn() {
       ${state.categories.map((c) => `
         <div class="wl-goal-cat">
           <div class="wl-goal-cat-name">${escapeHtml(c.name)}</div>
-          <ul class="wl-tiers">${c.tiers.slice().sort((a, b) => a.amount - b.amount).map((t) => renderTierRow(t, totalRevenue, false, c.id)).join("")}</ul>
+          <ul class="wl-tiers">${c.tiers.slice().sort((a, b) => a.targetAmount - b.targetAmount).map((t) => renderTierRow(t, totalRevenue, false, c.id)).join("")}</ul>
         </div>`).join("")}
     </section>
     ${state.revenueLog.length > 0 ? `
@@ -813,8 +992,9 @@ function renderWorkManageCard(w) {
         <span class="wl-progress-label">${done}/${total}</span>
       </div>
       <ul class="wl-subtasks">
-        ${w.subtasks.map((st) => `
-          <li class="wl-subtask-row">
+        ${w.subtasks.map((st, idx) => `
+          <li class="wl-subtask-row wl-subtask-row--draggable" draggable="true" data-drag-kind="subtask" data-work="${w.id}" data-index="${idx}">
+            ${ICONS.grip}
             <button class="wl-checkbox ${st.done ? "is-done" : ""}" data-action="toggleSubtask" data-work="${w.id}" data-sub="${st.id}">${st.done ? ICONS.check : ""}</button>
             <span class="wl-subtask-name ${st.done ? "is-done" : ""}">${escapeHtml(st.name)}</span>
             <button class="wl-icon-btn" data-action="removeSubtask" data-work="${w.id}" data-sub="${st.id}">${ICONS.x}</button>
@@ -843,7 +1023,7 @@ function renderWorksManage() {
 
 // ---- render: goals-manage tab ----
 function renderCategoryManageCard(c, totalRevenue) {
-  const tiers = c.tiers.slice().sort((a, b) => a.amount - b.amount);
+  const tiers = c.tiers.slice().sort((a, b) => a.targetAmount - b.targetAmount);
   const draft = drafts.newTier[c.id] || {};
   return `
     <section class="wl-card">
@@ -854,7 +1034,8 @@ function renderCategoryManageCard(c, totalRevenue) {
       <ul class="wl-tiers">${tiers.map((t) => renderTierRow(t, totalRevenue, true, c.id)).join("")}</ul>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="가격대 이름" data-draft="tierLabel" data-cat="${c.id}" value="${escapeAttr(draft.label || "")}" />
-        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="tierAmount" data-cat="${c.id}" value="${escapeAttr(draft.amount || "")}" />
+        <input class="wl-input wl-input--num" placeholder="목표 금액" inputmode="numeric" data-draft="tierTargetAmount" data-cat="${c.id}" value="${escapeAttr(draft.targetAmount || "")}" />
+        <input class="wl-input wl-input--num" placeholder="실제 가격(선택)" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${ICONS.plus}</button>
       </div>
@@ -1008,6 +1189,11 @@ function runAction(name, ds) {
       drafts.newTier[ds.cat] = { ...(drafts.newTier[ds.cat] || {}), image: null };
       render();
       break;
+    case "addWorkCost": addWorkCost(ds.work); break;
+    case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
+    case "addToQueue": addToQueue(); break;
+    case "removeFromQueue": removeFromQueue(ds.id); break;
+    case "startQueue": startQueue(); break;
   }
 }
 
@@ -1059,11 +1245,27 @@ function onRootInput(e) {
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), label: value };
       break;
     }
-    case "tierAmount": {
+    case "tierTargetAmount": {
       const catId = el.dataset.cat;
-      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), amount: clampNumeric() };
+      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), targetAmount: clampNumeric() };
       break;
     }
+    case "tierActualPrice": {
+      const catId = el.dataset.cat;
+      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), actualPrice: clampNumeric() };
+      break;
+    }
+    case "costLabel": {
+      const workId = el.dataset.work;
+      drafts.newCost[workId] = { ...(drafts.newCost[workId] || {}), label: value };
+      break;
+    }
+    case "costAmount": {
+      const workId = el.dataset.work;
+      drafts.newCost[workId] = { ...(drafts.newCost[workId] || {}), amount: clampNumeric() };
+      break;
+    }
+    case "queueTask": drafts.queueDraft.task = value; break;
     case "settingsToken": drafts.settings.token = value; break;
     case "settingsOwner": drafts.settings.owner = value; break;
     case "settingsRepo": drafts.settings.repo = value; break;
@@ -1099,7 +1301,47 @@ async function onRootChange(e) {
     const kind = select.dataset.select;
     if (kind === "linkWork") { drafts.linkWork = select.value; drafts.linkSub = ""; render(); }
     if (kind === "linkSub") { drafts.linkSub = select.value; }
+    if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
+    if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
   }
+}
+
+let dragSource = null;
+
+function onRootDragStart(e) {
+  const el = e.target.closest("[data-drag-kind]");
+  if (!el) return;
+  dragSource = { kind: el.dataset.dragKind, work: el.dataset.work || null, index: Number(el.dataset.index) };
+  el.classList.add("is-dragging");
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", el.dataset.index);
+  }
+}
+function onRootDragOver(e) {
+  if (!dragSource) return;
+  const el = e.target.closest("[data-drag-kind]");
+  if (!el || el.dataset.dragKind !== dragSource.kind) return;
+  if (dragSource.kind === "subtask" && el.dataset.work !== dragSource.work) return;
+  e.preventDefault();
+}
+function onRootDrop(e) {
+  if (!dragSource) return;
+  const el = e.target.closest("[data-drag-kind]");
+  if (!el || el.dataset.dragKind !== dragSource.kind) { dragSource = null; return; }
+  if (dragSource.kind === "subtask" && el.dataset.work !== dragSource.work) { dragSource = null; return; }
+  e.preventDefault();
+  const toIndex = Number(el.dataset.index);
+  if (dragSource.kind === "subtask") reorderSubtasks(dragSource.work, dragSource.index, toIndex);
+  else if (dragSource.kind === "queue") {
+    if (toIndex !== dragSource.index) { reorderArray(state.queue, dragSource.index, toIndex); persistAndRender(); }
+  }
+  dragSource = null;
+}
+function onRootDragEnd(e) {
+  const el = e.target.closest("[data-drag-kind]");
+  if (el) el.classList.remove("is-dragging");
+  dragSource = null;
 }
 
 function attachHandlers() {
@@ -1108,6 +1350,10 @@ function attachHandlers() {
   root.addEventListener("input", onRootInput);
   root.addEventListener("change", onRootChange);
   root.addEventListener("keydown", onRootKeydown);
+  root.addEventListener("dragstart", onRootDragStart);
+  root.addEventListener("dragover", onRootDragOver);
+  root.addEventListener("drop", onRootDrop);
+  root.addEventListener("dragend", onRootDragEnd);
 }
 
 attachHandlers();
