@@ -32,6 +32,7 @@ const ICONS = {
   gear: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
   grip: '<svg class="wl-icon wl-icon--sm wl-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
   pencil: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>',
+  archive: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"></path><line x1="10" y1="13" x2="14" y2="13"></line></svg>',
 };
 
 // ---- utils ----
@@ -126,6 +127,7 @@ function normalizeState(s) {
     updates: w.updates || [],
     costs: w.costs || [],
     expectedSalePrice: w.expectedSalePrice != null ? w.expectedSalePrice : null,
+    archived: w.archived === true,
   }));
   s.categories = (s.categories || []).map((c) => ({
     ...c,
@@ -158,6 +160,8 @@ let editingWorkDraft = { name: "", expectedSalePrice: "" };
 let dragSource = null;
 let costFormOpen = {};
 let expandedGoalCats = {};
+let collapsedWorks = {};
+let archivedSectionOpen = false;
 
 const drafts = {
   customSpendLabel: "",
@@ -412,7 +416,7 @@ function addWork() {
   const name = drafts.newWorkName.trim();
   if (!name) return;
   const expectedSalePrice = drafts.newWorkExpected ? Number(drafts.newWorkExpected) : null;
-  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice });
+  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice, archived: false });
   drafts.newWorkName = "";
   drafts.newWorkExpected = "";
   persistAndRender();
@@ -429,6 +433,26 @@ function startEditWork(workId) {
   render();
 }
 function cancelEditWork() { editingWorkId = null; render(); }
+function toggleWorkCollapse(workId) {
+  collapsedWorks[workId] = !collapsedWorks[workId];
+  render();
+}
+function archiveWork(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.archived = true;
+  persistAndRender();
+}
+function unarchiveWork(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.archived = false;
+  persistAndRender();
+}
+function toggleArchiveSection() {
+  archivedSectionOpen = !archivedSectionOpen;
+  render();
+}
 function saveEditWork() {
   const w = state.works.find((x) => x.id === editingWorkId);
   if (!w) return;
@@ -768,7 +792,8 @@ function renderQueueItem(item, idx) {
 
 function renderQueueSection() {
   const draft = drafts.queueDraft;
-  const selectedWork = state.works.find((w) => w.id === draft.workId);
+  const activeWorks = state.works.filter((w) => !w.archived);
+  const selectedWork = activeWorks.find((w) => w.id === draft.workId);
   return `
     <div class="wl-queue">
       <div class="wl-card-title">블록 추가</div>
@@ -776,11 +801,11 @@ function renderQueueSection() {
         <input class="wl-input wl-input--sm" placeholder="다음 블록에서 할 일" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
         <button class="wl-btn wl-btn--primary" data-action="addToQueue">${ICONS.plus} 추가</button>
       </div>
-      ${state.works.length > 0 ? `
+      ${activeWorks.length > 0 ? `
         <div class="wl-field-row wl-field-row--tight">
           <select class="wl-select" data-select="queueWork">
             <option value="">할일 연결 안 함</option>
-            ${state.works.map((w) => `<option value="${w.id}" ${draft.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
+            ${activeWorks.map((w) => `<option value="${w.id}" ${draft.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
           </select>
           ${selectedWork && selectedWork.subtasks.length > 0 ? `
             <select class="wl-select" data-select="queueSub">
@@ -847,7 +872,7 @@ function renderProjectStatusRow(w) {
 }
 
 function renderProjectsStatusColumn() {
-  const sorted = [...state.works].sort((a, b) => {
+  const sorted = state.works.filter((w) => !w.archived).sort((a, b) => {
     const aAt = (a.updates && a.updates[0] && a.updates[0].at) || 0;
     const bAt = (b.updates && b.updates[0] && b.updates[0].at) || 0;
     return bAt - aAt;
@@ -1023,6 +1048,7 @@ function renderWorkManageCard(w) {
   const total = w.subtasks.length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const isEditing = editingWorkId === w.id;
+  const collapsed = !!collapsedWorks[w.id];
   return `
     <section class="wl-card">
       <div class="wl-work-head">
@@ -1033,9 +1059,13 @@ function renderWorkManageCard(w) {
             <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
             <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
           </div>` : `
-          <div class="wl-work-name">${escapeHtml(w.name)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</div>
+          <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
+            <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
+            <span class="wl-work-name">${escapeHtml(w.name)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</span>
+          </button>
           <div>
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
+            <button class="wl-icon-btn" data-action="archiveWork" data-work="${w.id}" title="보관">${ICONS.archive}</button>
             <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
           </div>`}
       </div>
@@ -1043,40 +1073,63 @@ function renderWorkManageCard(w) {
         <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
         <span class="wl-progress-label">${done}/${total}</span>
       </div>
-      <ul class="wl-subtasks">
-        ${w.subtasks.map((st, idx) => {
-          const mins = subtaskMinutes(w.id, st.id);
-          return `
-          <li class="wl-subtask-row wl-subtask-row--draggable" draggable="true" data-drag-kind="subtask" data-work="${w.id}" data-index="${idx}">
-            ${ICONS.grip}
-            <button class="wl-checkbox ${st.done ? "is-done" : ""}" data-action="toggleSubtask" data-work="${w.id}" data-sub="${st.id}">${st.done ? ICONS.check : ""}</button>
-            <span class="wl-subtask-name ${st.done ? "is-done" : ""}">${escapeHtml(st.name)}</span>
-            ${mins > 0 ? `<span class="wl-subtask-time">${mins}분</span>` : ""}
-            <button class="wl-icon-btn" data-action="removeSubtask" data-work="${w.id}" data-sub="${st.id}">${ICONS.x}</button>
-          </li>`;
-        }).join("")}
-      </ul>
-      <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="하위 할일 추가" data-draft="newSubtask" data-work="${w.id}" data-enter-action="addSubtask" value="${escapeAttr(drafts.newSubtask[w.id] || "")}" />
-        <button class="wl-btn wl-btn--ghost" data-action="addSubtask" data-work="${w.id}">${ICONS.plus}</button>
-      </div>
-      ${(w.updates || []).length > 0 ? `
-        <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
-        <ul class="wl-session-log">
-          ${w.updates.map((u) => `
-            <li class="wl-session-log-row">
-              ${u.image ? `<img src="${u.image}" class="wl-update-img" alt="" />` : ""}
-              <div class="wl-session-log-body">
-                <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
-                <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
-              </div>
-              <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
+      ${collapsed ? "" : `
+        <ul class="wl-subtasks">
+          ${w.subtasks.map((st, idx) => {
+            const mins = subtaskMinutes(w.id, st.id);
+            return `
+            <li class="wl-subtask-row wl-subtask-row--draggable" draggable="true" data-drag-kind="subtask" data-work="${w.id}" data-index="${idx}">
+              ${ICONS.grip}
+              <button class="wl-checkbox ${st.done ? "is-done" : ""}" data-action="toggleSubtask" data-work="${w.id}" data-sub="${st.id}">${st.done ? ICONS.check : ""}</button>
+              <span class="wl-subtask-name ${st.done ? "is-done" : ""}">${escapeHtml(st.name)}</span>
+              ${mins > 0 ? `<span class="wl-subtask-time">${mins}분</span>` : ""}
+              <button class="wl-icon-btn" data-action="removeSubtask" data-work="${w.id}" data-sub="${st.id}">${ICONS.x}</button>
+            </li>`;
+          }).join("")}
+        </ul>
+        <div class="wl-field-row wl-field-row--tight">
+          <input class="wl-input wl-input--sm" placeholder="하위 할일 추가" data-draft="newSubtask" data-work="${w.id}" data-enter-action="addSubtask" value="${escapeAttr(drafts.newSubtask[w.id] || "")}" />
+          <button class="wl-btn wl-btn--ghost" data-action="addSubtask" data-work="${w.id}">${ICONS.plus}</button>
+        </div>
+        ${(w.updates || []).length > 0 ? `
+          <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
+          <ul class="wl-session-log">
+            ${w.updates.map((u) => `
+              <li class="wl-session-log-row">
+                ${u.image ? `<img src="${u.image}" class="wl-update-img" alt="" />` : ""}
+                <div class="wl-session-log-body">
+                  <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
+                  <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
+                </div>
+                <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
+              </li>`).join("")}
+          </ul>` : ""}
+      `}
+    </section>`;
+}
+
+function renderArchivedWorksSection(archived) {
+  return `
+    <section class="wl-card">
+      <button class="wl-goal-cat-toggle" data-action="toggleArchiveSection">
+        <span class="wl-goal-cat-name">보관함 (${archived.length})</span>
+        <span class="wl-goal-cat-toggle-icon ${archivedSectionOpen ? "is-expanded" : ""}">${ICONS.chevron}</span>
+      </button>
+      ${archivedSectionOpen ? `
+        <ul class="wl-archive-list">
+          ${archived.map((w) => `
+            <li class="wl-archive-row">
+              <span class="wl-work-name">${escapeHtml(w.name)}</span>
+              <button class="wl-btn wl-btn--ghost" data-action="unarchiveWork" data-work="${w.id}">복원</button>
+              <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
             </li>`).join("")}
         </ul>` : ""}
     </section>`;
 }
 
 function renderWorksManage() {
+  const active = state.works.filter((w) => !w.archived);
+  const archived = state.works.filter((w) => w.archived);
   return `
     <div class="wl-body">
       <section class="wl-card">
@@ -1086,8 +1139,9 @@ function renderWorksManage() {
           <button class="wl-btn wl-btn--primary" data-action="addWork">${ICONS.plus} 추가</button>
         </div>
       </section>
-      ${state.works.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : ""}
-      ${state.works.map(renderWorkManageCard).join("")}
+      ${active.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : ""}
+      ${active.map(renderWorkManageCard).join("")}
+      ${archived.length > 0 ? renderArchivedWorksSection(archived) : ""}
     </div>`;
 }
 
@@ -1257,6 +1311,10 @@ function runAction(name, ds) {
     case "editWork": startEditWork(ds.work); break;
     case "saveEditWork": saveEditWork(); break;
     case "cancelEditWork": cancelEditWork(); break;
+    case "toggleWorkCollapse": toggleWorkCollapse(ds.work); break;
+    case "archiveWork": archiveWork(ds.work); break;
+    case "unarchiveWork": unarchiveWork(ds.work); break;
+    case "toggleArchiveSection": toggleArchiveSection(); break;
     case "addSubtask": addSubtask(ds.work); break;
     case "toggleSubtask": toggleSubtask(ds.work, ds.sub); break;
     case "removeSubtask": removeSubtask(ds.work, ds.sub); break;
