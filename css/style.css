@@ -178,9 +178,12 @@ body {
 .wl-timer-phase { font-size: 11px; color: var(--wl-work); display: flex; align-items: center; gap: 5px; }
 .wl-timer-phase.is-break { color: var(--wl-save); }
 .wl-timer-clock { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--wl-text-muted); }
+.wl-timer-clock.is-overtime { color: var(--wl-spend); font-weight: 600; }
 .wl-timer-task { font-size: 15px; margin-bottom: 10px; }
 .wl-timer-bar { width: 100%; height: 4px; background: var(--wl-surface-2); border-radius: 2px; overflow: hidden; margin-bottom: 14px; }
 .wl-timer-bar-fill { height: 100%; background: var(--wl-work); }
+.wl-timer-bar-fill.is-overtime { background: var(--wl-spend); }
+.wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; }
 .wl-timer-actions .wl-btn { flex: 1; }
 
@@ -346,7 +349,11 @@ body {
 .wl-session-log-row:last-child { border-bottom: none; }
 .wl-session-log-body { flex: 1; min-width: 0; }
 .wl-session-log-text { font-size: 12.5px; overflow-wrap: break-word; }
-.wl-session-log-meta { font-size: 10.5px; color: var(--wl-text-muted); margin-top: 2px; }
+.wl-session-log-meta { font-size: 10.5px; color: var(--wl-text-muted); margin-top: 2px; display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.wl-inline-num {
+  width: 44px; background: var(--wl-surface-2); border: 1px solid var(--wl-border); color: var(--wl-text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; padding: 2px 4px; border-radius: 2px;
+}
 
 /* tier target/actual price */
 .wl-tier-actual { color: var(--wl-text-muted); }

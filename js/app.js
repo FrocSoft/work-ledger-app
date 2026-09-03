@@ -135,6 +135,7 @@ function defaultState() {
     activeBlock: null,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
+    spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
   };
 }
 
@@ -187,6 +188,11 @@ let archivedSectionOpen = false;
 let editingTagId = null;
 let editingTagDraft = { name: "", points: "" };
 let lightboxImage = null;
+let editingBlockId = null;
+let editingBlockMinutesDraft = "";
+let spendPresetsEditOpen = false;
+let editingPresetId = null;
+let editingPresetDraft = { label: "", cost: "" };
 
 const drafts = {
   customSpendLabel: "",
@@ -197,6 +203,8 @@ const drafts = {
   newSubtask: {},
   newTagName: "",
   newTagPoints: "",
+  newPresetLabel: "",
+  newPresetCost: "",
   pendingUpdate: { text: "", image: null, subtaskDone: false },
   newRevenueAmount: "",
   newCategoryName: "",
@@ -261,20 +269,10 @@ function startTicking() {
   tickHandle = setInterval(onTick, 1000);
 }
 
+// The clock never auto-transitions phases anymore — past the target duration
+// it just keeps counting up (overtime) until the user presses the button.
 function onTick() {
   if (!state) return;
-  if (state.activeBlock) {
-    const { phase: p, startedAt } = state.activeBlock;
-    const durationMs = (p === "work" ? WORK_MIN : BREAK_MIN) * 60000;
-    if (Date.now() - startedAt >= durationMs) {
-      if (p === "work") completeActiveBlock();
-      else {
-        startNextQueueItemOrEnd();
-        persistAndRender();
-      }
-      return;
-    }
-  }
   updateTimerDisplay();
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
@@ -348,10 +346,15 @@ function commitPendingSessionUpdate() {
   const w = state.works.find((x) => x.id === active.workId);
   if (!w) return;
   const subtask = active.subtaskId ? w.subtasks.find((s) => s.id === active.subtaskId) : null;
+  const block = findBlockById(active.id);
+  const minutes = block ? blockMinutes(block) : WORK_MIN;
   const typed = drafts.pendingUpdate.text.trim();
-  const text = typed || `${subtask ? `[${subtask.name}] ` : ""}"${active.task}" 블록 완료 (${WORK_MIN}분)`;
+  const text = typed || `${subtask ? `[${subtask.name}] ` : ""}"${active.task}" 블록 완료 (${minutes}분)`;
   w.updates = w.updates || [];
-  w.updates.unshift({ id: uid(), text, image: drafts.pendingUpdate.image || null, at: active.completedAt || Date.now(), auto: !typed });
+  w.updates.unshift({
+    id: uid(), text, image: drafts.pendingUpdate.image || null, at: active.completedAt || Date.now(),
+    auto: !typed, blockId: active.id,
+  });
   if (subtask && drafts.pendingUpdate.subtaskDone) subtask.done = true;
   drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
 }
@@ -376,10 +379,12 @@ function completeActiveBlock() {
   const day = todayKey();
   const blocks = state.blocksByDate[day] || [];
   const points = pointsForWork(state.activeBlock.workId);
+  const completedAt = Date.now();
+  const minutes = Math.max(0, Math.round((completedAt - state.activeBlock.startedAt) / 60000));
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
-    completedAt: Date.now(), points,
+    completedAt, points, minutes,
   };
   const newBlocks = [...blocks, newBlock];
   const overflow = newBlocks.length > DAILY_CAP_BLOCKS;
@@ -437,6 +442,43 @@ function useOffDay() {
   if (state.savings < OFFDAY_COST) return;
   state.savings -= OFFDAY_COST;
   state.offDayLog.push(Date.now());
+  persistAndRender();
+}
+function toggleSpendPresetsEdit() {
+  spendPresetsEditOpen = !spendPresetsEditOpen;
+  editingPresetId = null;
+  render();
+}
+function addSpendPreset() {
+  const label = drafts.newPresetLabel.trim();
+  const cost = Number(drafts.newPresetCost);
+  if (!label || !cost || cost <= 0) return;
+  state.spendPresets.push({ id: uid(), label, cost });
+  drafts.newPresetLabel = "";
+  drafts.newPresetCost = "";
+  persistAndRender();
+}
+function removeSpendPreset(id) {
+  state.spendPresets = state.spendPresets.filter((p) => p.id !== id);
+  persistAndRender();
+}
+function startEditSpendPreset(id) {
+  const p = state.spendPresets.find((x) => x.id === id);
+  if (!p) return;
+  editingPresetId = id;
+  editingPresetDraft = { label: p.label, cost: String(p.cost) };
+  render();
+}
+function cancelEditSpendPreset() { editingPresetId = null; render(); }
+function saveEditSpendPreset() {
+  const p = state.spendPresets.find((x) => x.id === editingPresetId);
+  if (!p) return;
+  const label = editingPresetDraft.label.trim();
+  const cost = Number(editingPresetDraft.cost);
+  if (!label || !cost || cost <= 0) return;
+  p.label = label;
+  p.cost = cost;
+  editingPresetId = null;
   persistAndRender();
 }
 
@@ -538,24 +580,60 @@ function workTagBadge(w) {
   const tag = workTag(w);
   return tag ? ` <span class="wl-work-tag">${escapeHtml(tag.name)} · ${tag.points}점</span>` : "";
 }
+// Old blocks saved before per-block duration tracking fall back to the
+// nominal block length.
+function blockMinutes(b) {
+  return b.minutes != null ? b.minutes : WORK_MIN;
+}
+function findBlockById(blockId) {
+  for (const date of Object.keys(state.blocksByDate)) {
+    const b = (state.blocksByDate[date] || []).find((x) => x.id === blockId);
+    if (b) return b;
+  }
+  return null;
+}
+function formatMinutes(mins) {
+  if (mins < 60) return `${mins}분`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+}
 function workSessionStats(workId) {
   let count = 0;
+  let minutes = 0;
   Object.values(state.blocksByDate).forEach((blocks) => {
-    (blocks || []).forEach((b) => { if (b.workId === workId) count += 1; });
+    (blocks || []).forEach((b) => { if (b.workId === workId) { count += 1; minutes += blockMinutes(b); } });
   });
-  return { count, minutes: count * WORK_MIN };
+  return { count, minutes };
 }
 function subtaskMinutes(workId, subtaskId) {
-  let count = 0;
+  let minutes = 0;
   Object.values(state.blocksByDate).forEach((blocks) => {
-    (blocks || []).forEach((b) => { if (b.workId === workId && b.subtaskId === subtaskId) count += 1; });
+    (blocks || []).forEach((b) => { if (b.workId === workId && b.subtaskId === subtaskId) minutes += blockMinutes(b); });
   });
-  return count * WORK_MIN;
+  return minutes;
 }
 function removeWorkUpdate(workId, updateId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
   w.updates = (w.updates || []).filter((u) => u.id !== updateId);
+  persistAndRender();
+}
+function startEditBlockMinutes(blockId) {
+  const b = findBlockById(blockId);
+  if (!b) return;
+  editingBlockId = blockId;
+  editingBlockMinutesDraft = String(blockMinutes(b));
+  render();
+}
+function cancelEditBlockMinutes() { editingBlockId = null; render(); }
+function saveEditBlockMinutes() {
+  const b = findBlockById(editingBlockId);
+  if (!b) return;
+  const mins = Number(editingBlockMinutesDraft);
+  if (!Number.isFinite(mins) || mins < 0) return;
+  b.minutes = mins;
+  editingBlockId = null;
   persistAndRender();
 }
 function toggleCostForm(workId) {
@@ -815,21 +893,22 @@ function renderImagePicker({ value, pickAction, clearAction, work, cat }) {
 function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, workId, subtaskId }) {
   const durationMs = durationMin * 60000;
   const elapsed = Date.now() - startedAt;
-  const remaining = durationMs - elapsed;
-  const pct = Math.min(100, Math.max(0, (elapsed / durationMs) * 100));
+  const overtime = elapsed > durationMs;
+  const pct = Math.min(100, (elapsed / durationMs) * 100);
   return `
     <div class="wl-timer">
       <div class="wl-timer-top">
         <span class="wl-timer-phase ${isBreak ? "is-break" : ""}">${isBreak ? ICONS.coffee : ICONS.square} ${phaseLabel}</span>
-        <span class="wl-timer-clock" id="wl-timer-clock">${formatClock(remaining)}</span>
+        <span class="wl-timer-clock ${overtime ? "is-overtime" : ""}" id="wl-timer-clock">${formatClock(elapsed)}</span>
       </div>
       <div class="wl-timer-task">${escapeHtml(label)}</div>
-      <div class="wl-timer-bar"><div class="wl-timer-bar-fill" id="wl-timer-bar-fill" style="width:${pct}%"></div></div>
+      <div class="wl-timer-bar"><div class="wl-timer-bar-fill ${overtime ? "is-overtime" : ""}" id="wl-timer-bar-fill" style="width:${pct}%"></div></div>
+      <div class="wl-hint">목표 ${durationMin}분${overtime ? " · 목표 시간을 초과했어요" : ""}</div>
       <div class="wl-timer-actions">
         ${!isBreak ? `
-          <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 일찍 마무리</button>
+          <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 완료</button>
           <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
-        ` : `<button class="wl-btn wl-btn--ghost" data-action="skipBreak">휴식 건너뛰기</button>`}
+        ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
       ${isBreak && workId ? renderSessionUpdateComposer(workId, subtaskId) : ""}
     </div>`;
@@ -862,10 +941,12 @@ function updateTimerDisplay() {
   const { phase: p, startedAt } = state.activeBlock;
   const durationMs = (p === "work" ? WORK_MIN : BREAK_MIN) * 60000;
   const elapsed = Date.now() - startedAt;
-  const remaining = durationMs - elapsed;
-  const pct = Math.min(100, Math.max(0, (elapsed / durationMs) * 100));
-  clockEl.textContent = formatClock(remaining);
+  const overtime = elapsed > durationMs;
+  const pct = Math.min(100, (elapsed / durationMs) * 100);
+  clockEl.textContent = formatClock(elapsed);
+  clockEl.classList.toggle("is-overtime", overtime);
   barEl.style.width = `${pct}%`;
+  barEl.classList.toggle("is-overtime", overtime);
 }
 
 function renderQueueItem(item, idx) {
@@ -978,6 +1059,47 @@ function renderProjectsStatusColumn() {
 }
 
 // ---- render: column 3 — today summary ----
+function renderSpendPresetButtons(dailyAvailable) {
+  return `
+    <div class="wl-spend-row">
+      ${state.spendPresets.map((p) => `
+        <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}" ${p.cost > dailyAvailable ? "disabled" : ""}>
+          <span>${escapeHtml(p.label)}</span>
+          <span class="wl-spend-cost">${p.cost}점</span>
+        </button>`).join("")}
+    </div>
+    <div class="wl-field-row wl-field-row--tight">
+      <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="customSpendLabel" value="${escapeAttr(drafts.customSpendLabel)}" />
+      <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="customSpendCost" value="${escapeAttr(drafts.customSpendCost)}" />
+      <button class="wl-btn wl-btn--ghost" data-action="addCustomSpend">${ICONS.plus}</button>
+    </div>`;
+}
+
+function renderSpendPresetsEditor() {
+  return `
+    ${state.spendPresets.length === 0 ? `<div class="wl-empty">등록된 소비 항목이 없어요.</div>` : `
+      <ul class="wl-tag-list">
+        ${state.spendPresets.map((p) => editingPresetId === p.id ? `
+          <li class="wl-tag-row">
+            <input class="wl-input wl-input--sm" data-draft="editPresetLabel" value="${escapeAttr(editingPresetDraft.label)}" data-enter-action="saveEditSpendPreset" />
+            <input class="wl-input wl-input--num" data-draft="editPresetCost" value="${escapeAttr(editingPresetDraft.cost)}" inputmode="numeric" data-enter-action="saveEditSpendPreset" />
+            <button class="wl-icon-btn" data-action="saveEditSpendPreset">${ICONS.check}</button>
+            <button class="wl-icon-btn" data-action="cancelEditSpendPreset">${ICONS.x}</button>
+          </li>` : `
+          <li class="wl-tag-row">
+            <span class="wl-tag-name">${escapeHtml(p.label)}</span>
+            <span class="wl-tag-points">${p.cost}점</span>
+            <button class="wl-icon-btn" data-action="editSpendPreset" data-preset="${p.id}">${ICONS.pencil}</button>
+            <button class="wl-icon-btn" data-action="removeSpendPreset" data-preset="${p.id}">${ICONS.x}</button>
+          </li>`).join("")}
+      </ul>`}
+    <div class="wl-field-row wl-field-row--tight">
+      <input class="wl-input wl-input--sm" placeholder="이름" data-draft="newPresetLabel" value="${escapeAttr(drafts.newPresetLabel)}" />
+      <input class="wl-input wl-input--num" placeholder="점수" inputmode="numeric" data-draft="newPresetCost" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetCost)}" />
+      <button class="wl-btn wl-btn--ghost" data-action="addSpendPreset">${ICONS.plus}</button>
+    </div>`;
+}
+
 function renderTodaySummaryColumn() {
   const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowPoints } = computeToday();
   return `
@@ -988,20 +1110,11 @@ function renderTodaySummaryColumn() {
       ${figure("저축", state.savings, "save")}
     </section>
     <section class="wl-card">
-      <div class="wl-card-title">소비</div>
-      <div class="wl-spend-row">
-        ${DEFAULT_SPEND_PRESETS.map((p) => `
-          <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}" ${p.cost > dailyAvailable ? "disabled" : ""}>
-            ${p.icon === "game" ? ICONS.gamepad : ICONS.globe}
-            <span>${escapeHtml(p.label)}</span>
-            <span class="wl-spend-cost">${p.cost}점</span>
-          </button>`).join("")}
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">소비</div>
+        <button class="wl-icon-btn" data-action="toggleSpendPresetsEdit">${spendPresetsEditOpen ? ICONS.check : ICONS.pencil}</button>
       </div>
-      <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="customSpendLabel" value="${escapeAttr(drafts.customSpendLabel)}" />
-        <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="customSpendCost" value="${escapeAttr(drafts.customSpendCost)}" />
-        <button class="wl-btn wl-btn--ghost" data-action="addCustomSpend">${ICONS.plus}</button>
-      </div>
+      ${spendPresetsEditOpen ? renderSpendPresetsEditor() : renderSpendPresetButtons(dailyAvailable)}
     </section>
     <section class="wl-card">
       <div class="wl-card-title">오늘의 기록</div>
@@ -1146,6 +1259,7 @@ function renderWorkManageCard(w) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const isEditing = editingWorkId === w.id;
   const collapsed = !!collapsedWorks[w.id];
+  const stats = workSessionStats(w.id);
   return `
     <section class="wl-card">
       <div class="wl-work-head">
@@ -1162,7 +1276,7 @@ function renderWorkManageCard(w) {
           </div>` : `
           <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
             <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
-            <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</span>
+            <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}${stats.minutes > 0 ? `<span class="wl-work-expected"> · 총 ${formatMinutes(stats.minutes)}</span>` : ""}</span>
           </button>
           <div>
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
@@ -1195,15 +1309,29 @@ function renderWorkManageCard(w) {
         ${(w.updates || []).length > 0 ? `
           <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
           <ul class="wl-session-log">
-            ${w.updates.map((u) => `
+            ${w.updates.map((u) => {
+              const block = u.blockId ? findBlockById(u.blockId) : null;
+              const isEditingMin = !!block && editingBlockId === block.id;
+              return `
               <li class="wl-session-log-row">
                 ${u.image ? `<img src="${u.image}" class="wl-update-img" alt="" />` : ""}
                 <div class="wl-session-log-body">
                   <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
-                  <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
+                  <div class="wl-session-log-meta">
+                    ${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}
+                    ${block ? (isEditingMin ? `
+                      · <input class="wl-inline-num" data-draft="editBlockMinutes" value="${escapeAttr(editingBlockMinutesDraft)}" inputmode="numeric" data-enter-action="saveEditBlockMinutes" />분
+                      <button class="wl-icon-btn" data-action="saveEditBlockMinutes">${ICONS.check}</button>
+                      <button class="wl-icon-btn" data-action="cancelEditBlockMinutes">${ICONS.x}</button>
+                    ` : `
+                      · ${blockMinutes(block)}분
+                      <button class="wl-icon-btn" data-action="editBlockMinutes" data-block="${block.id}">${ICONS.pencil}</button>
+                    `) : ""}
+                  </div>
                 </div>
                 <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
-              </li>`).join("")}
+              </li>`;
+            }).join("")}
           </ul>` : ""}
       `}
     </section>`;
@@ -1446,6 +1574,12 @@ function runAction(name, ds) {
     case "spendPreset": spend(ds.label, Number(ds.cost)); break;
     case "addCustomSpend": addCustomSpend(); break;
     case "useOffDay": useOffDay(); break;
+    case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
+    case "addSpendPreset": addSpendPreset(); break;
+    case "removeSpendPreset": removeSpendPreset(ds.preset); break;
+    case "editSpendPreset": startEditSpendPreset(ds.preset); break;
+    case "saveEditSpendPreset": saveEditSpendPreset(); break;
+    case "cancelEditSpendPreset": cancelEditSpendPreset(); break;
     case "openSettings": openSettings(); break;
     case "closeSettings": closeSettings(); break;
     case "saveSettings": submitSettings(); break;
@@ -1468,6 +1602,9 @@ function runAction(name, ds) {
     case "addWorkCost": addWorkCost(ds.work); break;
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
+    case "editBlockMinutes": startEditBlockMinutes(ds.block); break;
+    case "saveEditBlockMinutes": saveEditBlockMinutes(); break;
+    case "cancelEditBlockMinutes": cancelEditBlockMinutes(); break;
     case "toggleCostForm": toggleCostForm(ds.work); break;
     case "clearPendingUpdateImage": drafts.pendingUpdate.image = null; render(); break;
     case "togglePendingSubtaskDone": drafts.pendingUpdate.subtaskDone = !drafts.pendingUpdate.subtaskDone; render(); break;
@@ -1542,6 +1679,11 @@ function onRootInput(e) {
     case "newTagPoints": drafts.newTagPoints = clampNumeric(); break;
     case "editTagName": editingTagDraft.name = value; break;
     case "editTagPoints": editingTagDraft.points = clampNumeric(); break;
+    case "newPresetLabel": drafts.newPresetLabel = value; break;
+    case "newPresetCost": drafts.newPresetCost = clampNumeric(); break;
+    case "editPresetLabel": editingPresetDraft.label = value; break;
+    case "editPresetCost": editingPresetDraft.cost = clampNumeric(); break;
+    case "editBlockMinutes": editingBlockMinutesDraft = clampNumeric(); break;
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
