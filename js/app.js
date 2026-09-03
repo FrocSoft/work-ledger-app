@@ -86,6 +86,14 @@ function pointsForWork(workId) {
   const tag = w && w.tagId ? state.tags.find((t) => t.id === w.tagId) : null;
   return tag ? tag.points : 1;
 }
+// 25분 이하로 끝내면 기록만 하고 점수 없음, 25~50분이면 절반,
+// 목표 시간(50분)을 채우면 정상 지급 + 초과 25분마다 1점 보너스.
+function computeBlockPoints(basePoints, minutes) {
+  if (minutes <= 25) return 0;
+  if (minutes < WORK_MIN) return Math.round(basePoints / 2);
+  const overtimeBonus = Math.floor((minutes - WORK_MIN) / 25);
+  return basePoints + overtimeBonus;
+}
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -280,7 +288,9 @@ function onTick() {
   maybeNotifyTimerDone();
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
-    if (reconcileSavings()) persistAndRender();
+    const savingsChanged = reconcileSavings();
+    const spendChanged = applyActiveSpendTick();
+    if (savingsChanged || spendChanged) persistAndRender();
   }
 }
 
@@ -404,9 +414,9 @@ function completeActiveBlock() {
   if (!state.activeBlock) return;
   const day = todayKey();
   const blocks = state.blocksByDate[day] || [];
-  const points = pointsForWork(state.activeBlock.workId);
   const completedAt = Date.now();
   const minutes = Math.max(0, Math.round((completedAt - state.activeBlock.startedAt) / 60000));
+  const points = computeBlockPoints(pointsForWork(state.activeBlock.workId), minutes);
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
@@ -446,18 +456,28 @@ function reorderArray(arr, fromIndex, toIndex) {
 }
 
 // ---- actions: spend / savings ----
-// No cap check here — going negative is allowed; it just eats into savings
-// the next time reconcileSavings runs.
-function spend(label, cost) {
+// Deducts `cost` points. If today's pool doesn't cover it, the shortfall is
+// taken from savings right away instead of just showing a negative balance.
+function applySpendCost(label, cost) {
+  if (cost <= 0) return;
+  const { dailyPool, dailySpent } = computeToday();
+  const availableBefore = dailyPool - dailySpent;
+  const overflow = Math.max(0, cost - Math.max(0, availableBefore));
+  if (overflow > 0) state.savings -= overflow;
   const day = todayKey();
   const list = state.spendsByDate[day] || [];
   state.spendsByDate[day] = [...list, { id: uid(), label, cost, at: Date.now() }];
+}
+function spend(label, cost) {
+  applySpendCost(label, cost);
   persistAndRender();
 }
 function addCustomSpend() {
   const cost = Number(drafts.customSpendCost);
   if (!drafts.customSpendLabel.trim() || !cost || cost <= 0) return;
-  spend(drafts.customSpendLabel.trim(), cost);
+  const label = drafts.customSpendLabel.trim();
+  if (!window.confirm(`"${label}"(-${cost}점)을 소비할까요?`)) return;
+  spend(label, cost);
   drafts.customSpendLabel = "";
   drafts.customSpendCost = "";
 }
@@ -469,16 +489,43 @@ function spendElapsedPoints(activeSpend, now) {
 }
 function startSpendTimer(label, costPerHour) {
   if (state.activeSpend) return;
-  state.activeSpend = { label, costPerHour, startedAt: Date.now() };
+  if (!window.confirm(`"${label}" 소비를 시작할까요? (시간당 -${costPerHour}점, 끄기 전까지 계속 소비돼요)`)) return;
+  state.activeSpend = { label, costPerHour, startedAt: Date.now(), appliedPoints: 0, logId: null };
   persistAndRender();
+}
+// Called periodically (see onTick) so points actually leave the balance as
+// the timer runs, not only once you press "끄기" — same overflow-to-savings
+// rule as applySpendCost, applied incrementally as the cost grows.
+function applyActiveSpendTick() {
+  const active = state.activeSpend;
+  if (!active) return false;
+  const total = spendElapsedPoints(active);
+  const delta = total - (active.appliedPoints || 0);
+  if (delta <= 0) return false;
+  const { dailyPool, dailySpent } = computeToday();
+  const availableBefore = dailyPool - dailySpent;
+  const overflow = Math.max(0, delta - Math.max(0, availableBefore));
+  if (overflow > 0) state.savings -= overflow;
+  const day = todayKey();
+  const list = state.spendsByDate[day] || [];
+  if (active.logId) {
+    state.spendsByDate[day] = list.map((e) => (e.id === active.logId ? { ...e, cost: e.cost + delta } : e));
+  } else {
+    const id = uid();
+    active.logId = id;
+    state.spendsByDate[day] = [...list, { id, label: active.label, cost: delta, at: Date.now() }];
+  }
+  active.appliedPoints = total;
+  return true;
 }
 function stopSpendTimer() {
   const active = state.activeSpend;
   if (!active) return;
-  const cost = spendElapsedPoints(active);
+  applyActiveSpendTick();
+  const totalCost = active.appliedPoints || 0;
   state.activeSpend = null;
-  if (cost > 0) spend(active.label, cost);
-  else persistAndRender();
+  sendNotification("소비 종료", `"${active.label}" 소비를 종료했어요. 총 -${totalCost}점 사용했어요.`);
+  persistAndRender();
 }
 function useOffDay() {
   if (state.savings < OFFDAY_COST) return;
