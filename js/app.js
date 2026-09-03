@@ -7,11 +7,12 @@ import {
 const WORK_MIN = 50;
 const BREAK_MIN = 10;
 const OFFDAY_COST = 15;
+const SPEND_MIN_PER_POINT = 10; // every spend timer drains at this fixed rate: 1 point per 10 minutes
 const SIZE_WARN_BYTES = 900 * 1024; // Contents API caps file writes around 1MB
 
 const DEFAULT_SPEND_PRESETS = [
-  { id: "game", label: "게임 1시간", cost: 3, icon: "game" },
-  { id: "web", label: "웹서핑 1시간", cost: 3, icon: "web" },
+  { label: "게임" },
+  { label: "웹서핑" },
 ];
 
 const DEFAULT_TAGS = [
@@ -144,7 +145,7 @@ function defaultState() {
     activeSpend: null,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
-    spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
+    spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label })),
   };
 }
 
@@ -202,7 +203,7 @@ let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
 let notifiedKey = null;
 let editingPresetId = null;
-let editingPresetDraft = { label: "", cost: "" };
+let editingPresetDraft = { label: "" };
 
 const drafts = {
   customSpendLabel: "",
@@ -214,7 +215,6 @@ const drafts = {
   newTagName: "",
   newTagPoints: "",
   newPresetLabel: "",
-  newPresetCost: "",
   pendingUpdate: { text: "", image: null, subtaskDone: false },
   newRevenueAmount: "",
   newCategoryName: "",
@@ -483,18 +483,15 @@ function addCustomSpend() {
 }
 
 // ---- actions: spend timer (presets run continuously until stopped) ----
-// Starting always costs the full listed rate right away (a flat "start-up"
-// charge); time spent beyond that keeps adding to it proportionally — the
-// "초과분" that accrues the longer the timer runs.
+// Fixed rate for every spend timer: 1 point per 10 minutes elapsed.
 function spendElapsedPoints(activeSpend, now) {
   const minutes = ((now != null ? now : Date.now()) - activeSpend.startedAt) / 60000;
-  return activeSpend.costPerHour + Math.round((minutes / 60) * activeSpend.costPerHour);
+  return Math.floor(minutes / SPEND_MIN_PER_POINT);
 }
-function startSpendTimer(label, costPerHour) {
+function startSpendTimer(label) {
   if (state.activeSpend) return;
-  if (!window.confirm(`"${label}" 소비를 시작할까요? (시작하면 바로 -${costPerHour}점, 이후 시간이 지날수록 초과분이 계속 더 깎여요)`)) return;
-  state.activeSpend = { label, costPerHour, startedAt: Date.now(), appliedPoints: 0, logId: null };
-  applyActiveSpendTick();
+  if (!window.confirm(`"${label}" 소비를 시작할까요? (10분당 1점씩 차감, 끄기 전까지 계속 소비돼요)`)) return;
+  state.activeSpend = { label, startedAt: Date.now(), appliedPoints: 0, logId: null };
   persistAndRender();
 }
 // Called periodically (see onTick) so points actually leave the balance as
@@ -544,11 +541,9 @@ function toggleSpendPresetsEdit() {
 }
 function addSpendPreset() {
   const label = drafts.newPresetLabel.trim();
-  const cost = Number(drafts.newPresetCost);
-  if (!label || !cost || cost <= 0) return;
-  state.spendPresets.push({ id: uid(), label, cost });
+  if (!label) return;
+  state.spendPresets.push({ id: uid(), label });
   drafts.newPresetLabel = "";
-  drafts.newPresetCost = "";
   persistAndRender();
 }
 function removeSpendPreset(id) {
@@ -559,7 +554,7 @@ function startEditSpendPreset(id) {
   const p = state.spendPresets.find((x) => x.id === id);
   if (!p) return;
   editingPresetId = id;
-  editingPresetDraft = { label: p.label, cost: String(p.cost) };
+  editingPresetDraft = { label: p.label };
   render();
 }
 function cancelEditSpendPreset() { editingPresetId = null; render(); }
@@ -567,10 +562,8 @@ function saveEditSpendPreset() {
   const p = state.spendPresets.find((x) => x.id === editingPresetId);
   if (!p) return;
   const label = editingPresetDraft.label.trim();
-  const cost = Number(editingPresetDraft.cost);
-  if (!label || !cost || cost <= 0) return;
+  if (!label) return;
   p.label = label;
-  p.cost = cost;
   editingPresetId = null;
   persistAndRender();
 }
@@ -1164,11 +1157,11 @@ function renderProjectsStatusColumn() {
 // ---- render: column 3 — today summary ----
 function renderSpendPresetButtons() {
   return `
+    <div class="wl-hint">10분당 1점씩 차감돼요</div>
     <div class="wl-spend-row">
       ${state.spendPresets.map((p) => `
-        <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}">
+        <button class="wl-spend-btn" data-action="spendPreset" data-label="${escapeAttr(p.label)}">
           <span>${escapeHtml(p.label)}</span>
-          <span class="wl-spend-cost">${p.cost}점/시간</span>
         </button>`).join("")}
     </div>
     <div class="wl-field-row wl-field-row--tight">
@@ -1202,20 +1195,18 @@ function renderSpendPresetsEditor() {
         ${state.spendPresets.map((p) => editingPresetId === p.id ? `
           <li class="wl-tag-row">
             <input class="wl-input wl-input--sm" data-draft="editPresetLabel" value="${escapeAttr(editingPresetDraft.label)}" data-enter-action="saveEditSpendPreset" />
-            <input class="wl-input wl-input--num" data-draft="editPresetCost" value="${escapeAttr(editingPresetDraft.cost)}" inputmode="numeric" data-enter-action="saveEditSpendPreset" />
             <button class="wl-icon-btn" data-action="saveEditSpendPreset">${ICONS.check}</button>
             <button class="wl-icon-btn" data-action="cancelEditSpendPreset">${ICONS.x}</button>
           </li>` : `
           <li class="wl-tag-row">
             <span class="wl-tag-name">${escapeHtml(p.label)}</span>
-            <span class="wl-tag-points">${p.cost}점</span>
             <button class="wl-icon-btn" data-action="editSpendPreset" data-preset="${p.id}">${ICONS.pencil}</button>
             <button class="wl-icon-btn" data-action="removeSpendPreset" data-preset="${p.id}">${ICONS.x}</button>
           </li>`).join("")}
       </ul>`}
+    <div class="wl-hint">모든 소비 항목은 10분당 1점씩 차감돼요</div>
     <div class="wl-field-row wl-field-row--tight">
-      <input class="wl-input wl-input--sm" placeholder="이름" data-draft="newPresetLabel" value="${escapeAttr(drafts.newPresetLabel)}" />
-      <input class="wl-input wl-input--num" placeholder="점수" inputmode="numeric" data-draft="newPresetCost" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetCost)}" />
+      <input class="wl-input wl-input--sm" placeholder="이름" data-draft="newPresetLabel" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetLabel)}" />
       <button class="wl-btn wl-btn--ghost" data-action="addSpendPreset">${ICONS.plus}</button>
     </div>`;
 }
@@ -1707,7 +1698,7 @@ function runAction(name, ds) {
     case "finishEarly": finishEarly(); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
-    case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
+    case "spendPreset": startSpendTimer(ds.label); break;
     case "stopSpendTimer": stopSpendTimer(); break;
     case "addCustomSpend": addCustomSpend(); break;
     case "useOffDay": useOffDay(); break;
@@ -1818,9 +1809,7 @@ function onRootInput(e) {
     case "editTagName": editingTagDraft.name = value; break;
     case "editTagPoints": editingTagDraft.points = clampNumeric(); break;
     case "newPresetLabel": drafts.newPresetLabel = value; break;
-    case "newPresetCost": drafts.newPresetCost = clampNumeric(); break;
     case "editPresetLabel": editingPresetDraft.label = value; break;
-    case "editPresetCost": editingPresetDraft.cost = clampNumeric(); break;
     case "editBlockMinutes": editingBlockMinutesDraft = clampNumeric(); break;
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
