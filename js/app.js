@@ -31,6 +31,7 @@ const ICONS = {
   sparkles: '<svg class="wl-icon" style="width:22px;height:22px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"></path><path d="M19 15l.7 2.1L22 18l-2.3.9L19 21l-.7-2.1L16 18l2.3-.9L19 15z"></path></svg>',
   gear: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
   grip: '<svg class="wl-icon wl-icon--sm wl-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
+  pencil: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>',
 };
 
 // ---- utils ----
@@ -53,17 +54,6 @@ function formatClock(ms) {
 function formatTime(ms) {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-function formatRelative(ms) {
-  const diff = Date.now() - ms;
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return "방금";
-  if (min < 60) return `${min}분 전`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}시간 전`;
-  const day = Math.floor(hr / 24);
-  if (day < 7) return `${day}일 전`;
-  return formatKDate(new Date(ms));
 }
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -128,10 +118,14 @@ function defaultState() {
 }
 
 // Migrates older saved shapes (tier.amount -> targetAmount/actualPrice, missing
-// works.costs/queue) so existing GitHub-stored state keeps working.
+// works.costs/expectedSalePrice/queue) so existing GitHub-stored state keeps working.
 function normalizeState(s) {
   s.works = (s.works || []).map((w) => ({
-    ...w, subtasks: w.subtasks || [], updates: w.updates || [], costs: w.costs || [],
+    ...w,
+    subtasks: w.subtasks || [],
+    updates: w.updates || [],
+    costs: w.costs || [],
+    expectedSalePrice: w.expectedSalePrice != null ? w.expectedSalePrice : null,
   }));
   s.categories = (s.categories || []).map((c) => ({
     ...c,
@@ -157,16 +151,19 @@ let saveErrorMsg = "";
 let saveTimer = null;
 let tickHandle = null;
 let lastMinuteCheck = 0;
+let editingCategoryId = null;
+let editingCategoryDraft = "";
+let editingWorkId = null;
+let editingWorkDraft = { name: "", expectedSalePrice: "" };
+let dragSource = null;
 
 const drafts = {
-  taskDraft: "",
-  linkWork: "",
-  linkSub: "",
   customSpendLabel: "",
   customSpendCost: "",
   newWorkName: "",
+  newWorkExpected: "",
   newSubtask: {},
-  newUpdate: {},
+  pendingUpdate: { text: "", image: null },
   newRevenueAmount: "",
   newCategoryName: "",
   newTier: {},
@@ -195,6 +192,7 @@ async function boot() {
     sha = s;
     phase = "ready";
     reconcileSavings();
+    if (!state.activeBlock && state.queue.length > 0) startNextQueueItemOrEnd();
     startTicking();
   } catch (e) {
     phase = "loadError";
@@ -307,32 +305,36 @@ function computeToday() {
   return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday };
 }
 
-// ---- actions: timer ----
-function startBlock() {
-  const task = drafts.taskDraft.trim();
-  if (!task) return;
-  state.activeBlock = {
-    id: uid(), task, workId: drafts.linkWork || null, subtaskId: drafts.linkSub || null,
-    startedAt: Date.now(), phase: "work",
-  };
-  drafts.taskDraft = "";
-  persistAndRender();
+// ---- actions: timer + continuous block queue ----
+// Commits whatever the user typed into the break-time composer (or an
+// auto-generated line if they typed nothing) as the linked work's update —
+// this is now the only way work updates get created.
+function commitPendingSessionUpdate() {
+  const active = state.activeBlock;
+  if (!active || active.phase !== "break" || !active.workId) return;
+  const w = state.works.find((x) => x.id === active.workId);
+  if (!w) return;
+  const subtask = active.subtaskId ? w.subtasks.find((s) => s.id === active.subtaskId) : null;
+  const typed = drafts.pendingUpdate.text.trim();
+  const text = typed || `${subtask ? `[${subtask.name}] ` : ""}"${active.task}" 블록 완료 (${WORK_MIN}분)`;
+  w.updates = w.updates || [];
+  w.updates.unshift({ id: uid(), text, image: drafts.pendingUpdate.image || null, at: active.completedAt || Date.now(), auto: !typed });
+  drafts.pendingUpdate = { text: "", image: null };
 }
 
-// Logs a completed work session onto its linked work as an auto-generated
-// update, so finishing a block visibly moves the linked task forward.
-function logWorkSession(workId, subtaskId, task, at) {
-  const w = state.works.find((x) => x.id === workId);
-  if (!w) return;
-  const subtask = subtaskId ? w.subtasks.find((s) => s.id === subtaskId) : null;
-  w.updates = w.updates || [];
-  w.updates.unshift({
-    id: uid(),
-    text: `${subtask ? `[${subtask.name}] ` : ""}"${task}" 블록 완료 (${WORK_MIN}분)`,
-    image: null,
-    at,
-    auto: true,
-  });
+// The single choke point where a session ends: commits any pending update,
+// then either starts the next queued block or goes idle.
+function startNextQueueItemOrEnd() {
+  commitPendingSessionUpdate();
+  if (state.queue.length > 0) {
+    const next = state.queue.shift();
+    state.activeBlock = {
+      id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
+      startedAt: Date.now(), phase: "work",
+    };
+  } else {
+    state.activeBlock = null;
+  }
 }
 
 function completeActiveBlock() {
@@ -348,27 +350,15 @@ function completeActiveBlock() {
   const overflow = newBlocks.length > DAILY_CAP_BLOCKS;
   state.blocksByDate[day] = newBlocks;
   if (overflow) state.savings += 1;
-  if (newBlock.workId) logWorkSession(newBlock.workId, newBlock.subtaskId, newBlock.task, newBlock.completedAt);
-  state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now() };
+  drafts.pendingUpdate = { text: "", image: null };
+  state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
 }
 
 function finishEarly() { completeActiveBlock(); }
 function skipBreak() { startNextQueueItemOrEnd(); persistAndRender(); }
-function cancelBlock() { state.activeBlock = null; persistAndRender(); }
+function cancelBlock() { startNextQueueItemOrEnd(); persistAndRender(); }
 
-// ---- actions: session queue (continuous blocks) ----
-function startNextQueueItemOrEnd() {
-  if (state.queue.length > 0) {
-    const next = state.queue.shift();
-    state.activeBlock = {
-      id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
-      startedAt: Date.now(), phase: "work",
-    };
-  } else {
-    state.activeBlock = null;
-  }
-}
 function addToQueue() {
   const task = drafts.queueDraft.task.trim();
   if (!task) return;
@@ -376,15 +366,11 @@ function addToQueue() {
     id: uid(), task, workId: drafts.queueDraft.workId || null, subtaskId: drafts.queueDraft.subtaskId || null,
   });
   drafts.queueDraft = { task: "", workId: "", subtaskId: "" };
+  if (!state.activeBlock) startNextQueueItemOrEnd();
   persistAndRender();
 }
 function removeFromQueue(id) {
   state.queue = state.queue.filter((q) => q.id !== id);
-  persistAndRender();
-}
-function startQueue() {
-  if (state.activeBlock || state.queue.length === 0) return;
-  startNextQueueItemOrEnd();
   persistAndRender();
 }
 function reorderArray(arr, fromIndex, toIndex) {
@@ -419,12 +405,32 @@ function useOffDay() {
 function addWork() {
   const name = drafts.newWorkName.trim();
   if (!name) return;
-  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [] });
+  const expectedSalePrice = drafts.newWorkExpected ? Number(drafts.newWorkExpected) : null;
+  state.works.push({ id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice });
   drafts.newWorkName = "";
+  drafts.newWorkExpected = "";
   persistAndRender();
 }
 function removeWork(id) {
   state.works = state.works.filter((w) => w.id !== id);
+  persistAndRender();
+}
+function startEditWork(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  editingWorkId = workId;
+  editingWorkDraft = { name: w.name, expectedSalePrice: w.expectedSalePrice != null ? String(w.expectedSalePrice) : "" };
+  render();
+}
+function cancelEditWork() { editingWorkId = null; render(); }
+function saveEditWork() {
+  const w = state.works.find((x) => x.id === editingWorkId);
+  if (!w) return;
+  const name = editingWorkDraft.name.trim();
+  if (!name) return;
+  w.name = name;
+  w.expectedSalePrice = editingWorkDraft.expectedSalePrice ? Number(editingWorkDraft.expectedSalePrice) : null;
+  editingWorkId = null;
   persistAndRender();
 }
 function addSubtask(workId) {
@@ -482,23 +488,6 @@ function removeWorkCost(workId, costId) {
   w.costs = (w.costs || []).filter((c) => c.id !== costId);
   persistAndRender();
 }
-function addWorkUpdate(workId) {
-  const draft = drafts.newUpdate[workId] || {};
-  const text = (draft.text || "").trim();
-  if (!text && !draft.image) return;
-  const w = state.works.find((x) => x.id === workId);
-  if (!w) return;
-  w.updates = w.updates || [];
-  w.updates.unshift({ id: uid(), text, image: draft.image || null, at: Date.now() });
-  drafts.newUpdate[workId] = { text: "", image: null };
-  persistAndRender();
-}
-function removeWorkUpdate(workId, updateId) {
-  const w = state.works.find((x) => x.id === workId);
-  if (!w) return;
-  w.updates = (w.updates || []).filter((u) => u.id !== updateId);
-  persistAndRender();
-}
 
 // ---- actions: revenue / goals ----
 function addRevenue() {
@@ -523,6 +512,28 @@ function removeCategory(id) {
   state.categories = state.categories.filter((c) => c.id !== id);
   persistAndRender();
 }
+function reorderCategories(fromIndex, toIndex) {
+  if (fromIndex === toIndex) return;
+  reorderArray(state.categories, fromIndex, toIndex);
+  persistAndRender();
+}
+function startEditCategory(catId) {
+  const c = state.categories.find((x) => x.id === catId);
+  if (!c) return;
+  editingCategoryId = catId;
+  editingCategoryDraft = c.name;
+  render();
+}
+function cancelEditCategory() { editingCategoryId = null; render(); }
+function saveEditCategory() {
+  const c = state.categories.find((x) => x.id === editingCategoryId);
+  if (!c) return;
+  const name = editingCategoryDraft.trim();
+  if (!name) return;
+  c.name = name;
+  editingCategoryId = null;
+  persistAndRender();
+}
 function addTier(catId) {
   const draft = drafts.newTier[catId] || {};
   const targetAmount = Number(draft.targetAmount);
@@ -530,9 +541,33 @@ function addTier(catId) {
   if (!draft.label || !draft.label.trim() || !targetAmount || targetAmount <= 0) return;
   const c = state.categories.find((x) => x.id === catId);
   if (!c) return;
-  c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
+  if (draft.editingId) {
+    const t = c.tiers.find((x) => x.id === draft.editingId);
+    if (t) {
+      t.label = draft.label.trim();
+      t.targetAmount = targetAmount;
+      t.actualPrice = actualPrice;
+      t.image = draft.image || null;
+    }
+  } else {
+    c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
+  }
   drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
   persistAndRender();
+}
+function startEditTier(catId, tierId) {
+  const c = state.categories.find((x) => x.id === catId);
+  const t = c && c.tiers.find((x) => x.id === tierId);
+  if (!t) return;
+  drafts.newTier[catId] = {
+    label: t.label, targetAmount: String(t.targetAmount), actualPrice: String(t.actualPrice),
+    image: t.image || null, editingId: t.id,
+  };
+  render();
+}
+function cancelEditTier(catId) {
+  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
+  render();
 }
 function removeTier(catId, tierId) {
   const c = state.categories.find((x) => x.id === catId);
@@ -635,33 +670,8 @@ function renderImagePicker({ value, pickAction, clearAction, work, cat }) {
     </label>`;
 }
 
-// ---- render: dashboard / today column ----
-function renderStartForm() {
-  const selectedWork = state.works.find((w) => w.id === drafts.linkWork);
-  return `
-    <div class="wl-start">
-      <div class="wl-field-row">
-        <input class="wl-input" placeholder="이번 블록에서 할 일" data-draft="taskDraft" data-enter-action="startBlock" value="${escapeAttr(drafts.taskDraft)}" />
-      </div>
-      ${state.works.length > 0 ? `
-        <div class="wl-field-row wl-field-row--tight">
-          <select class="wl-select" data-select="linkWork">
-            <option value="">할일 연결 안 함</option>
-            ${state.works.map((w) => `<option value="${w.id}" ${drafts.linkWork === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
-          </select>
-          ${selectedWork && selectedWork.subtasks.length > 0 ? `
-            <select class="wl-select" data-select="linkSub">
-              <option value="">하위 할일 선택 안 함</option>
-              ${selectedWork.subtasks.map((st) => `<option value="${st.id}" ${drafts.linkSub === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
-            </select>` : ""}
-        </div>` : ""}
-      <button class="wl-btn wl-btn--primary wl-btn--full" data-action="startBlock" ${!drafts.taskDraft.trim() ? "disabled" : ""}>
-        ${ICONS.play} 블록 시작 (50분)
-      </button>
-    </div>`;
-}
-
-function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak }) {
+// ---- render: column 1 — time block ----
+function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, workId }) {
   const durationMs = durationMin * 60000;
   const elapsed = Date.now() - startedAt;
   const remaining = durationMs - elapsed;
@@ -679,6 +689,19 @@ function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak }
           <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 일찍 마무리</button>
           <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
         ` : `<button class="wl-btn wl-btn--ghost" data-action="skipBreak">휴식 건너뛰기</button>`}
+      </div>
+      ${isBreak && workId ? renderSessionUpdateComposer() : ""}
+    </div>`;
+}
+
+function renderSessionUpdateComposer() {
+  const draft = drafts.pendingUpdate;
+  return `
+    <div class="wl-session-update">
+      <div class="wl-hint">방금 세션 기록 — 쉬는 동안 적으면 저장돼요</div>
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="pendingUpdateText" value="${escapeAttr(draft.text)}" />
+        ${renderImagePicker({ value: draft.image || null, pickAction: "pickPendingUpdateImage", clearAction: "clearPendingUpdateImage" })}
       </div>
     </div>`;
 }
@@ -713,13 +736,10 @@ function renderQueueSection() {
   const selectedWork = state.works.find((w) => w.id === draft.workId);
   return `
     <div class="wl-queue">
-      <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">연속 세션 대기열</div>
-        ${state.queue.length > 0 ? `<span class="wl-hint">${state.queue.length}개 대기 중</span>` : ""}
-      </div>
+      <div class="wl-card-title">블록 추가</div>
       <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="다음에 할 일" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
-        <button class="wl-btn wl-btn--ghost" data-action="addToQueue">${ICONS.plus}</button>
+        <input class="wl-input wl-input--sm" placeholder="다음 블록에서 할 일" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
+        <button class="wl-btn wl-btn--primary" data-action="addToQueue">${ICONS.plus} 추가</button>
       </div>
       ${state.works.length > 0 ? `
         <div class="wl-field-row wl-field-row--tight">
@@ -734,33 +754,79 @@ function renderQueueSection() {
             </select>` : ""}
         </div>` : ""}
       ${state.queue.length > 0 ? `
+        <div class="wl-hint" style="margin-top:10px">다음 블록 ${state.queue.length}개 · 드래그로 순서 변경</div>
         <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
-        ${!state.activeBlock
-          ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} 대기열 시작 (${state.queue.length}개)</button>`
-          : `<div class="wl-hint">휴식이 끝나면 자동으로 다음 세션이 시작돼요.</div>`}
-      ` : ""}
+      ` : `<div class="wl-hint" style="margin-top:10px">추가하면 바로(또는 지금 블록이 끝나는 대로) 순서대로 진행돼요.</div>`}
     </div>`;
 }
 
-function renderTodayColumn() {
-  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday } = computeToday();
+function renderTimeBlockColumn() {
   const active = state.activeBlock;
+  return `
+    <section class="wl-card">
+      ${active
+        ? renderTimerBlock(active.phase === "work"
+            ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, startedAt: active.startedAt, isBreak: false, workId: active.workId }
+            : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, startedAt: active.startedAt, isBreak: true, workId: active.workId })
+        : `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 추가하면 바로 시작돼요.</div>`}
+    </section>
+    <section class="wl-card">
+      ${renderQueueSection()}
+    </section>`;
+}
+
+// ---- render: column 2 — project status ----
+function renderProjectStatusRow(w) {
+  const latest = (w.updates || [])[0];
+  const costTotal = workCostTotal(w);
+  const costDraft = drafts.newCost[w.id] || {};
+  return `
+    <div class="wl-project-row">
+      <div class="wl-work-name">${escapeHtml(w.name)}</div>
+      ${latest
+        ? `<div class="wl-project-status">
+            ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
+            <div class="wl-project-status-text">${escapeHtml(latest.text)}</div>
+          </div>`
+        : `<div class="wl-empty">아직 기록이 없어요.</div>`}
+      <div class="wl-project-money">
+        <span>쓴 비용 <b>${costTotal.toLocaleString()}원</b></span>
+        <span>판매예상 <b>${w.expectedSalePrice != null ? `${w.expectedSalePrice.toLocaleString()}원` : "미설정"}</b></span>
+      </div>
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="쓴 비용 추가" data-draft="costLabel" data-work="${w.id}" value="${escapeAttr(costDraft.label || "")}" />
+        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.plus}</button>
+      </div>
+    </div>`;
+}
+
+function renderProjectsStatusColumn() {
+  const sorted = [...state.works].sort((a, b) => {
+    const aAt = (a.updates && a.updates[0] && a.updates[0].at) || 0;
+    const bAt = (b.updates && b.updates[0] && b.updates[0].at) || 0;
+    return bAt - aAt;
+  });
+  return `
+    <section class="wl-card">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">프로젝트 최신 상황</div>
+        <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
+      </div>
+      ${sorted.length === 0 ? `<div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div>` : ""}
+      ${sorted.map(renderProjectStatusRow).join("")}
+    </section>`;
+}
+
+// ---- render: column 3 — today summary ----
+function renderTodaySummaryColumn() {
+  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowToday } = computeToday();
   return `
     <section class="wl-ledger-strip">
       ${figure("오늘 적립", `${dailyPool}${overflowToday ? ` +${overflowToday}` : ""}`)}
       ${figure("오늘 사용", dailySpent)}
       ${figure("오늘 가용", Math.max(0, dailyAvailable), "work")}
       ${figure("저축", state.savings, "save")}
-    </section>
-    <section class="wl-card">
-      ${active
-        ? renderTimerBlock(active.phase === "work"
-            ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, startedAt: active.startedAt, isBreak: false }
-            : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, startedAt: active.startedAt, isBreak: true })
-        : renderStartForm()}
-    </section>
-    <section class="wl-card">
-      ${renderQueueSection()}
     </section>
     <section class="wl-card">
       <div class="wl-card-title">소비</div>
@@ -792,6 +858,7 @@ function renderTodayColumn() {
     </section>`;
 }
 
+// ---- render: column 4 — savings + goals ----
 function renderSavingsCard() {
   const pct = Math.min(100, Math.round((state.savings / OFFDAY_COST) * 100));
   const canUse = state.savings >= OFFDAY_COST;
@@ -820,86 +887,7 @@ function renderSavingsCard() {
     </section>`;
 }
 
-function renderWorkProgressBlock(w) {
-  const done = w.subtasks.filter((s) => s.done).length;
-  const total = w.subtasks.length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  const latest = (w.updates || [])[0];
-  const draft = drafts.newUpdate[w.id] || {};
-  const costDraft = drafts.newCost[w.id] || {};
-  const stats = workSessionStats(w.id);
-  const costTotal = workCostTotal(w);
-  return `
-    <div class="wl-work-block">
-      <div class="wl-work-name">${escapeHtml(w.name)}</div>
-      ${stats.count > 0 || costTotal > 0 ? `
-        <div class="wl-work-stats">
-          ${stats.count > 0 ? `<span>완료 세션 ${stats.count}회 · ${Math.round(stats.minutes / 60 * 10) / 10}시간</span>` : ""}
-          ${costTotal > 0 ? `<span class="wl-work-stats-cost">누적 비용 ${costTotal.toLocaleString()}원</span>` : ""}
-        </div>` : ""}
-      ${total > 0 ? `
-        <div class="wl-progress">
-          <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
-          <span class="wl-progress-label">${done}/${total}</span>
-        </div>
-        <ul class="wl-subtasks">
-          ${w.subtasks.map((st) => `
-            <li class="wl-subtask-row">
-              <button class="wl-checkbox ${st.done ? "is-done" : ""}" data-action="toggleSubtask" data-work="${w.id}" data-sub="${st.id}">${st.done ? ICONS.check : ""}</button>
-              <span class="wl-subtask-name ${st.done ? "is-done" : ""}">${escapeHtml(st.name)}</span>
-            </li>`).join("")}
-        </ul>` : ""}
-      ${latest ? `
-        <div class="wl-update-latest ${latest.auto ? "is-auto" : ""}">
-          ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
-          <div class="wl-update-body">
-            ${latest.text ? `<div class="wl-update-text">${latest.auto ? `${ICONS.square} ` : ""}${escapeHtml(latest.text)}</div>` : ""}
-            <div class="wl-update-meta">
-              <span>${latest.auto ? "자동 기록 · " : ""}${escapeHtml(formatRelative(latest.at))}</span>
-              <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${latest.id}">${ICONS.x}</button>
-            </div>
-          </div>
-        </div>` : ""}
-      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
-        <input class="wl-input wl-input--sm" placeholder="새 업데이트" data-draft="updateText" data-work="${w.id}" data-enter-action="addWorkUpdate" value="${escapeAttr(draft.text || "")}" />
-        ${renderImagePicker({ value: draft.image || null, pickAction: "pickUpdateImage", clearAction: "clearUpdateImage", work: w.id })}
-        <button class="wl-btn wl-btn--ghost" data-action="addWorkUpdate" data-work="${w.id}">${ICONS.plus}</button>
-      </div>
-      ${(w.costs || []).length > 0 ? `
-        <ul class="wl-cost-log">
-          ${w.costs.map((c) => `
-            <li class="wl-cost-row">
-              <span class="wl-cost-label">${escapeHtml(c.label || "비용")}</span>
-              <span class="wl-cost-amount">${c.amount.toLocaleString()}원</span>
-              <button class="wl-icon-btn" data-action="removeWorkCost" data-work="${w.id}" data-cost="${c.id}">${ICONS.x}</button>
-            </li>`).join("")}
-        </ul>` : ""}
-      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
-        <input class="wl-input wl-input--sm" placeholder="이 할일에 쓴 비용" data-draft="costLabel" data-work="${w.id}" value="${escapeAttr(costDraft.label || "")}" />
-        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
-        <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.plus}</button>
-      </div>
-    </div>`;
-}
-
-function renderWorksProgressPanel() {
-  const sorted = [...state.works].sort((a, b) => {
-    const aAt = (a.updates && a.updates[0] && a.updates[0].at) || 0;
-    const bAt = (b.updates && b.updates[0] && b.updates[0].at) || 0;
-    return bAt - aAt;
-  });
-  return `
-    <section class="wl-card">
-      <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">할일 진행</div>
-        <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
-      </div>
-      ${sorted.length === 0 ? `<div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div>` : ""}
-      ${sorted.map(renderWorkProgressBlock).join("")}
-    </section>`;
-}
-
-function renderTierRow(t, totalRevenue, showRemove, catId) {
+function renderTierRow(t, totalRevenue, showActions, catId) {
   const unlocked = totalRevenue >= t.targetAmount;
   const showActual = t.actualPrice != null && t.actualPrice !== t.targetAmount;
   return `
@@ -909,7 +897,10 @@ function renderTierRow(t, totalRevenue, showRemove, catId) {
       <span class="wl-tier-label">${escapeHtml(t.label)}</span>
       <span class="wl-tier-amount">목표 ${t.targetAmount.toLocaleString()}원${showActual ? `<span class="wl-tier-actual"> · 실가 ${t.actualPrice.toLocaleString()}원</span>` : ""}</span>
       <span class="wl-tier-status">${unlocked ? "구매 가능" : "미도달"}</span>
-      ${showRemove ? `<button class="wl-icon-btn" data-action="removeTier" data-cat="${catId}" data-tier="${t.id}">${ICONS.x}</button>` : ""}
+      ${showActions ? `
+        <button class="wl-icon-btn" data-action="editTier" data-cat="${catId}" data-tier="${t.id}">${ICONS.pencil}</button>
+        <button class="wl-icon-btn" data-action="removeTier" data-cat="${catId}" data-tier="${t.id}">${ICONS.x}</button>
+      ` : ""}
     </li>`;
 }
 
@@ -970,9 +961,10 @@ function renderGoalsColumn() {
 function renderDashboard() {
   return `
     <div class="wl-dashboard-grid">
-      <div class="wl-dash-col">${renderTodayColumn()}</div>
-      <div class="wl-dash-col">${renderSavingsCard()}${renderWorksProgressPanel()}</div>
-      <div class="wl-dash-col">${renderGoalsColumn()}</div>
+      <div class="wl-dash-col">${renderTimeBlockColumn()}</div>
+      <div class="wl-dash-col">${renderProjectsStatusColumn()}</div>
+      <div class="wl-dash-col">${renderTodaySummaryColumn()}</div>
+      <div class="wl-dash-col">${renderSavingsCard()}${renderGoalsColumn()}</div>
     </div>`;
 }
 
@@ -981,11 +973,22 @@ function renderWorkManageCard(w) {
   const done = w.subtasks.filter((s) => s.done).length;
   const total = w.subtasks.length;
   const pct = total ? Math.round((done / total) * 100) : 0;
+  const isEditing = editingWorkId === w.id;
   return `
     <section class="wl-card">
       <div class="wl-work-head">
-        <div class="wl-work-name">${escapeHtml(w.name)}</div>
-        <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
+        ${isEditing ? `
+          <div class="wl-field-row wl-field-row--tight wl-field-row--wrap" style="flex:1;margin:0">
+            <input class="wl-input wl-input--sm" data-draft="editWorkName" value="${escapeAttr(editingWorkDraft.name)}" placeholder="할일 이름" data-enter-action="saveEditWork" />
+            <input class="wl-input wl-input--num" data-draft="editWorkExpected" value="${escapeAttr(editingWorkDraft.expectedSalePrice)}" placeholder="판매예상" inputmode="numeric" data-enter-action="saveEditWork" />
+            <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
+            <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
+          </div>` : `
+          <div class="wl-work-name">${escapeHtml(w.name)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}</div>
+          <div>
+            <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
+            <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
+          </div>`}
       </div>
       <div class="wl-progress">
         <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
@@ -1013,6 +1016,7 @@ function renderWorksManage() {
       <section class="wl-card">
         <div class="wl-field-row">
           <input class="wl-input" placeholder="새 할일 이름" data-draft="newWorkName" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkName)}" />
+          <input class="wl-input wl-input--num" placeholder="판매예상(선택)" inputmode="numeric" data-draft="newWorkExpected" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkExpected)}" />
           <button class="wl-btn wl-btn--primary" data-action="addWork">${ICONS.plus} 추가</button>
         </div>
       </section>
@@ -1022,14 +1026,27 @@ function renderWorksManage() {
 }
 
 // ---- render: goals-manage tab ----
-function renderCategoryManageCard(c, totalRevenue) {
+function renderCategoryManageCard(c, totalRevenue, idx) {
   const tiers = c.tiers.slice().sort((a, b) => a.targetAmount - b.targetAmount);
   const draft = drafts.newTier[c.id] || {};
+  const isEditingName = editingCategoryId === c.id;
   return `
-    <section class="wl-card">
+    <section class="wl-card" data-drag-kind="category" data-index="${idx}">
       <div class="wl-work-head">
-        <div class="wl-work-name">${escapeHtml(c.name)}</div>
-        <button class="wl-icon-btn" data-action="removeCategory" data-cat="${c.id}">${ICONS.trash}</button>
+        ${isEditingName ? `
+          <div class="wl-field-row wl-field-row--tight" style="flex:1;margin:0">
+            <input class="wl-input wl-input--sm" data-draft="editCategoryName" value="${escapeAttr(editingCategoryDraft)}" data-enter-action="saveEditCategory" />
+            <button class="wl-icon-btn" data-action="saveEditCategory">${ICONS.check}</button>
+            <button class="wl-icon-btn" data-action="cancelEditCategory">${ICONS.x}</button>
+          </div>` : `
+          <div class="wl-work-head-left">
+            <span draggable="true" data-drag-kind="category" data-index="${idx}" class="wl-drag-handle">${ICONS.grip}</span>
+            <div class="wl-work-name">${escapeHtml(c.name)}</div>
+          </div>
+          <div>
+            <button class="wl-icon-btn" data-action="editCategory" data-cat="${c.id}">${ICONS.pencil}</button>
+            <button class="wl-icon-btn" data-action="removeCategory" data-cat="${c.id}">${ICONS.trash}</button>
+          </div>`}
       </div>
       <ul class="wl-tiers">${tiers.map((t) => renderTierRow(t, totalRevenue, true, c.id)).join("")}</ul>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
@@ -1037,7 +1054,8 @@ function renderCategoryManageCard(c, totalRevenue) {
         <input class="wl-input wl-input--num" placeholder="목표 금액" inputmode="numeric" data-draft="tierTargetAmount" data-cat="${c.id}" value="${escapeAttr(draft.targetAmount || "")}" />
         <input class="wl-input wl-input--num" placeholder="실제 가격(선택)" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
-        <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${ICONS.plus}</button>
+        <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${draft.editingId ? ICONS.check : ICONS.plus} ${draft.editingId ? "저장" : ""}</button>
+        ${draft.editingId ? `<button class="wl-btn wl-btn--ghost" data-action="cancelEditTier" data-cat="${c.id}">${ICONS.x}</button>` : ""}
       </div>
     </section>`;
 }
@@ -1053,7 +1071,8 @@ function renderGoalsManage() {
         </div>
       </section>
       ${state.categories.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 카테고리가 없어요.</div>` : ""}
-      ${state.categories.map((c) => renderCategoryManageCard(c, totalRevenue)).join("")}
+      ${state.categories.length > 1 ? `<div class="wl-hint">카드 왼쪽 손잡이를 드래그하면 우선순위(표시 순서)를 바꿀 수 있어요.</div>` : ""}
+      ${state.categories.map((c, idx) => renderCategoryManageCard(c, totalRevenue, idx)).join("")}
     </div>`;
 }
 
@@ -1154,7 +1173,6 @@ function render() {
 // ---- event wiring ----
 function runAction(name, ds) {
   switch (name) {
-    case "startBlock": startBlock(); break;
     case "finishEarly": finishEarly(); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
@@ -1170,36 +1188,33 @@ function runAction(name, ds) {
     case "retryLoad": boot(); break;
     case "addWork": addWork(); break;
     case "removeWork": removeWork(ds.work); break;
+    case "editWork": startEditWork(ds.work); break;
+    case "saveEditWork": saveEditWork(); break;
+    case "cancelEditWork": cancelEditWork(); break;
     case "addSubtask": addSubtask(ds.work); break;
     case "toggleSubtask": toggleSubtask(ds.work, ds.sub); break;
     case "removeSubtask": removeSubtask(ds.work, ds.sub); break;
-    case "addWorkUpdate": addWorkUpdate(ds.work); break;
-    case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
-    case "clearUpdateImage":
-      drafts.newUpdate[ds.work] = { ...(drafts.newUpdate[ds.work] || {}), image: null };
-      render();
-      break;
+    case "addWorkCost": addWorkCost(ds.work); break;
+    case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
+    case "clearPendingUpdateImage": drafts.pendingUpdate.image = null; render(); break;
     case "addRevenue": addRevenue(); break;
     case "removeRevenue": removeRevenue(ds.id); break;
     case "addCategory": addCategory(); break;
     case "removeCategory": removeCategory(ds.cat); break;
+    case "editCategory": startEditCategory(ds.cat); break;
+    case "saveEditCategory": saveEditCategory(); break;
+    case "cancelEditCategory": cancelEditCategory(); break;
     case "addTier": addTier(ds.cat); break;
+    case "editTier": startEditTier(ds.cat, ds.tier); break;
+    case "cancelEditTier": cancelEditTier(ds.cat); break;
     case "removeTier": removeTier(ds.cat, ds.tier); break;
     case "clearTierImage":
       drafts.newTier[ds.cat] = { ...(drafts.newTier[ds.cat] || {}), image: null };
       render();
       break;
-    case "addWorkCost": addWorkCost(ds.work); break;
-    case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "addToQueue": addToQueue(); break;
     case "removeFromQueue": removeFromQueue(ds.id); break;
-    case "startQueue": startQueue(); break;
   }
-}
-
-function updateStartButtonState() {
-  const btn = document.querySelector(".wl-start .wl-btn--primary");
-  if (btn) btn.disabled = !drafts.taskDraft.trim();
 }
 
 function onRootClick(e) {
@@ -1228,18 +1243,17 @@ function onRootInput(e) {
     return cleaned;
   };
   switch (key) {
-    case "taskDraft": drafts.taskDraft = value; updateStartButtonState(); break;
     case "customSpendLabel": drafts.customSpendLabel = value; break;
     case "customSpendCost": drafts.customSpendCost = clampNumeric(); break;
     case "newWorkName": drafts.newWorkName = value; break;
+    case "newWorkExpected": drafts.newWorkExpected = clampNumeric(); break;
+    case "editWorkName": editingWorkDraft.name = value; break;
+    case "editWorkExpected": editingWorkDraft.expectedSalePrice = clampNumeric(); break;
     case "newSubtask": drafts.newSubtask[el.dataset.work] = value; break;
-    case "updateText": {
-      const workId = el.dataset.work;
-      drafts.newUpdate[workId] = { ...(drafts.newUpdate[workId] || {}), text: value };
-      break;
-    }
+    case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
+    case "editCategoryName": editingCategoryDraft = value; break;
     case "tierLabel": {
       const catId = el.dataset.cat;
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), label: value };
@@ -1283,12 +1297,11 @@ async function onRootChange(e) {
     try {
       const dataUrl = await resizeImageFile(file);
       const action = filePick.dataset.filepick;
-      if (action === "pickUpdateImage") {
-        const workId = filePick.dataset.work;
-        drafts.newUpdate[workId] = { ...(drafts.newUpdate[workId] || {}), image: dataUrl };
-      } else if (action === "pickTierImage") {
+      if (action === "pickTierImage") {
         const catId = filePick.dataset.cat;
         drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), image: dataUrl };
+      } else if (action === "pickPendingUpdateImage") {
+        drafts.pendingUpdate.image = dataUrl;
       }
       render();
     } catch (err) {
@@ -1299,14 +1312,10 @@ async function onRootChange(e) {
   const select = e.target.closest("[data-select]");
   if (select) {
     const kind = select.dataset.select;
-    if (kind === "linkWork") { drafts.linkWork = select.value; drafts.linkSub = ""; render(); }
-    if (kind === "linkSub") { drafts.linkSub = select.value; }
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
   }
 }
-
-let dragSource = null;
 
 function onRootDragStart(e) {
   const el = e.target.closest("[data-drag-kind]");
@@ -1333,9 +1342,8 @@ function onRootDrop(e) {
   e.preventDefault();
   const toIndex = Number(el.dataset.index);
   if (dragSource.kind === "subtask") reorderSubtasks(dragSource.work, dragSource.index, toIndex);
-  else if (dragSource.kind === "queue") {
-    if (toIndex !== dragSource.index) { reorderArray(state.queue, dragSource.index, toIndex); persistAndRender(); }
-  }
+  else if (dragSource.kind === "queue" && toIndex !== dragSource.index) { reorderArray(state.queue, dragSource.index, toIndex); persistAndRender(); }
+  else if (dragSource.kind === "category" && toIndex !== dragSource.index) reorderCategories(dragSource.index, toIndex);
   dragSource = null;
 }
 function onRootDragEnd(e) {
