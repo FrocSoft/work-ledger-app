@@ -135,6 +135,7 @@ function defaultState() {
   return {
     blocksByDate: {},
     spendsByDate: {},
+    borrowedByDate: {},
     savings: 0,
     processedDates: [],
     offDayLog: [],
@@ -171,6 +172,7 @@ function normalizeState(s) {
     }),
   }));
   s.queue = s.queue || [];
+  s.borrowedByDate = s.borrowedByDate || {};
   return s;
 }
 
@@ -202,6 +204,7 @@ let editingBlockId = null;
 let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
 let notifiedKey = null;
+let renderedDay = null;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -263,6 +266,7 @@ function reconcileSavings() {
     const leftover = Math.max(0, dailyPoolFromBlocks(blocks) - spentTotal(spends));
     addTo += leftover;
     newlyProcessed.push(date);
+    delete state.borrowedByDate[date];
   });
   if (newlyProcessed.length > 0) {
     state.savings += addTo;
@@ -289,7 +293,11 @@ function onTick() {
     lastMinuteCheck = Date.now();
     const savingsChanged = reconcileSavings();
     const spendChanged = applyActiveSpendTick();
+    // A tab left open past midnight would otherwise keep showing yesterday's
+    // "오늘" numbers until something else forces a render.
+    const dayChanged = renderedDay !== todayKey();
     if (savingsChanged || spendChanged) persistAndRender();
+    else if (dayChanged) render();
   }
 }
 
@@ -422,6 +430,12 @@ function completeActiveBlock() {
     completedAt, points, minutes,
   };
   state.blocksByDate[day] = [...blocks, newBlock];
+  const owed = state.borrowedByDate[day] || 0;
+  if (owed > 0 && points > 0) {
+    const repaid = Math.min(owed, points);
+    state.savings += repaid;
+    state.borrowedByDate[day] = owed - repaid;
+  }
   drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
@@ -481,10 +495,21 @@ function applyActiveSpendTick() {
   const { dailyPool, dailySpent } = computeToday();
   const availableBefore = dailyPool - dailySpent;
   const overflow = Math.max(0, delta - Math.max(0, availableBefore));
-  if (overflow > 0) state.savings -= overflow;
   const day = todayKey();
+  if (overflow > 0) {
+    // Borrowed from savings because today's pool didn't cover it. Blocks
+    // finished later today pay this back first (see completeActiveBlock),
+    // so the day's result doesn't depend on whether you spent before or
+    // after earning.
+    state.savings -= overflow;
+    state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) + overflow;
+  }
   const list = state.spendsByDate[day] || [];
-  if (active.logId) {
+  // The running log entry lives on the day the timer started; once the clock
+  // rolls past midnight that entry is on yesterday's list, so start a fresh
+  // one for today instead of silently dropping the charge.
+  const existing = active.logId ? list.find((e) => e.id === active.logId) : null;
+  if (existing) {
     state.spendsByDate[day] = list.map((e) => (e.id === active.logId ? { ...e, cost: e.cost + delta } : e));
   } else {
     const id = uid();
@@ -1225,18 +1250,27 @@ function renderTodaySummaryColumn() {
 
 // ---- render: column 4 — savings + goals ----
 function renderSavingsCard() {
-  const pct = Math.min(100, Math.round((state.savings / OFFDAY_COST) * 100));
-  const canUse = state.savings >= OFFDAY_COST;
+  const saved = state.savings;
+  const inDebt = saved < 0;
+  // Math.min alone let a negative value through as a negative CSS width, which
+  // is an invalid declaration — the bar then rendered full instead of empty.
+  const passes = inDebt ? 0 : Math.floor(saved / OFFDAY_COST);
+  const towardNext = inDebt ? 0 : saved % OFFDAY_COST;
+  const pct = Math.max(0, Math.min(100, Math.round((towardNext / OFFDAY_COST) * 100)));
+  const canUse = saved >= OFFDAY_COST;
   return `
     <section class="wl-card wl-card--center">
       ${ICONS.piggy}
-      <div class="wl-save-total">${state.savings}점</div>
+      <div class="wl-save-total ${inDebt ? "is-debt" : ""}">${saved}점</div>
+      ${passes > 0 ? `<div class="wl-save-passes">휴무권 ${passes}장</div>` : ""}
       <div class="wl-progress">
         <div class="wl-progress-bar"><div class="wl-progress-fill is-save" style="width:${pct}%"></div></div>
-        <span class="wl-progress-label">${state.savings}/${OFFDAY_COST}</span>
+        <span class="wl-progress-label ${inDebt ? "is-debt" : ""}">${inDebt ? `0점까지 ${-saved}` : `${towardNext}/${OFFDAY_COST}`}</span>
       </div>
       <button class="wl-btn wl-btn--primary wl-btn--full" data-action="useOffDay" ${!canUse ? "disabled" : ""}>휴무권 사용 (-${OFFDAY_COST}점)</button>
-      ${!canUse ? `<div class="wl-hint">쓰지 않고 남긴 포인트가 매일 저녁 여기로 쌓여요.</div>` : ""}
+      ${inDebt
+        ? `<div class="wl-hint">쓴 만큼 저축에서 빠졌어요. 0으로 돌아오려면 ${-saved}점이 필요해요.</div>`
+        : !canUse ? `<div class="wl-hint">쓰지 않고 남긴 포인트가 매일 저녁 여기로 쌓여요.</div>` : ""}
     </section>
     <section class="wl-card">
       <div class="wl-card-title">사용 기록</div>
@@ -1665,6 +1699,7 @@ function render() {
   else if (phase === "loadError") html = renderLoadError();
   else if (state) html = renderShell();
   root.innerHTML = html;
+  renderedDay = todayKey();
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   if (prevScrollLeft) {
