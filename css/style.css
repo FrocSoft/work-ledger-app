@@ -249,11 +249,14 @@ body {
 .wl-save-icon { color: var(--wl-save); }
 .wl-save-total { font-family: 'IBM Plex Mono', monospace; font-size: 30px; font-weight: 600; color: var(--wl-save); }
 .wl-save-total.is-sales { color: var(--wl-sales); font-size: 24px; }
+.wl-save-total.is-debt { color: var(--wl-spend); }
+.wl-save-passes { font-size: 12px; color: var(--wl-text-muted); margin-top: -2px; }
 
 .wl-progress { display: flex; align-items: center; gap: 10px; width: 100%; margin: 4px 0; }
 .wl-progress-bar { flex: 1; height: 6px; background: var(--wl-surface-2); border-radius: 3px; overflow: hidden; }
 .wl-progress-fill { height: 100%; background: var(--wl-work); }
 .wl-progress-fill.is-save { background: var(--wl-save); }
+.wl-progress-label.is-debt { color: var(--wl-spend); }
 .wl-progress-fill.is-sales { background: var(--wl-sales); }
 .wl-progress-label { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--wl-text-muted); min-width: 40px; text-align: right; }
 
