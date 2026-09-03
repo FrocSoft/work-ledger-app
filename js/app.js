@@ -931,11 +931,11 @@ function renderSettingsOverlay() {
         </div>
         <div class="wl-settings-field">
           <label class="wl-settings-label">저장소 소유자 (owner)</label>
-          <input class="wl-input" data-draft="settingsOwner" value="${escapeAttr(s.owner)}" placeholder="frocsoft" />
+          <input class="wl-input" data-draft="settingsOwner" value="${escapeAttr(s.owner)}" placeholder="예: my-github-account" />
         </div>
         <div class="wl-settings-field">
           <label class="wl-settings-label">저장소 이름 (repo)</label>
-          <input class="wl-input" data-draft="settingsRepo" value="${escapeAttr(s.repo)}" placeholder="work-ledger-data" />
+          <input class="wl-input" data-draft="settingsRepo" value="${escapeAttr(s.repo)}" placeholder="예: my-data-repo" />
         </div>
         <div class="wl-settings-field">
           <label class="wl-settings-label">브랜치</label>
