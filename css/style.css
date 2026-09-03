@@ -235,12 +235,9 @@ body {
 
 .wl-update-img { width: 44px; height: 44px; object-fit: cover; border-radius: 2px; flex-shrink: 0; }
 
-.wl-goal-cat { margin-bottom: 12px; }
-.wl-goal-cat:last-child { margin-bottom: 0; }
-.wl-goal-cat-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-
 .wl-subtasks { list-style: none; margin: 10px 0 0; padding: 0; }
 .wl-subtask-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+.wl-subtask-time { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--wl-text-muted); flex-shrink: 0; }
 .wl-checkbox {
   width: 21px; height: 21px; border: 1px solid var(--wl-border); border-radius: 2px;
   background: none; display: flex; align-items: center; justify-content: center;
@@ -259,11 +256,19 @@ body {
 .wl-tier-status { font-size: 11px; color: var(--wl-text-muted); }
 .wl-tier-row.is-unlocked .wl-tier-status { color: var(--wl-sales); }
 
-.wl-goal-hero { display: flex; padding: 0; overflow: hidden; flex-direction: row; align-items: stretch; }
-.wl-goal-hero-img { width: 96px; flex-shrink: 0; object-fit: cover; }
-.wl-goal-hero-img--empty { display: flex; align-items: center; justify-content: center; background: var(--wl-surface-2); color: var(--wl-text-muted); }
-.wl-goal-hero-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.wl-goal-hero-label { font-size: 15px; font-weight: 600; }
+.wl-goal-cat-card { padding: 12px 14px; }
+.wl-goal-cat-toggle {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  background: none; border: none; color: var(--wl-text); font-family: inherit; cursor: pointer; padding: 0;
+}
+.wl-goal-cat-name { font-size: 13px; font-weight: 600; }
+.wl-goal-cat-toggle-icon { color: var(--wl-text-muted); display: inline-flex; transition: transform 0.15s; }
+.wl-goal-cat-toggle-icon.is-expanded { transform: rotate(90deg); }
+.wl-goal-next { display: flex; gap: 10px; margin-top: 10px; }
+.wl-goal-next-img { width: 44px; height: 44px; flex-shrink: 0; object-fit: cover; border-radius: 2px; }
+.wl-goal-next-img--empty { display: flex; align-items: center; justify-content: center; background: var(--wl-surface-2); color: var(--wl-text-muted); }
+.wl-goal-next-body { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wl-goal-next-label { font-size: 13.5px; font-weight: 600; }
 
 .wl-imgpick {
   display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--wl-border);
@@ -310,11 +315,24 @@ body {
 .wl-project-row .wl-work-name { margin-bottom: 6px; }
 .wl-project-status { display: flex; gap: 8px; margin-bottom: 8px; }
 .wl-project-status-text { font-size: 12.5px; color: var(--wl-text); overflow-wrap: break-word; align-self: center; }
-.wl-project-money { display: flex; gap: 12px; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 8px; }
+.wl-project-money { display: flex; gap: 12px; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 6px; }
 .wl-project-money b { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--wl-text); }
+.wl-cost-toggle {
+  background: none; border: none; color: var(--wl-text-muted); font-family: inherit;
+  font-size: 11px; padding: 2px 0; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
+}
+.wl-cost-toggle:hover { color: var(--wl-text); }
 
 /* break-time session update composer */
 .wl-session-update { width: 100%; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--wl-border); text-align: left; }
+
+/* session archive (works-manage tab) */
+.wl-session-log { list-style: none; margin: 8px 0 0; padding: 0; }
+.wl-session-log-row { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--wl-border); }
+.wl-session-log-row:last-child { border-bottom: none; }
+.wl-session-log-body { flex: 1; min-width: 0; }
+.wl-session-log-text { font-size: 12.5px; overflow-wrap: break-word; }
+.wl-session-log-meta { font-size: 10.5px; color: var(--wl-text-muted); margin-top: 2px; }
 
 /* tier target/actual price */
 .wl-tier-actual { color: var(--wl-text-muted); }
