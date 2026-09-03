@@ -4,7 +4,6 @@ import {
 } from "./github-api.js";
 
 // ---- config ----
-const DAILY_CAP_BLOCKS = 6;
 const WORK_MIN = 50;
 const BREAK_MIN = 10;
 const OFFDAY_COST = 15;
@@ -40,6 +39,7 @@ const ICONS = {
   grip: '<svg class="wl-icon wl-icon--sm wl-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
   pencil: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>',
   archive: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"></path><line x1="10" y1="13" x2="14" y2="13"></line></svg>',
+  bell: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>',
 };
 
 // ---- utils ----
@@ -78,7 +78,7 @@ function blockPoints(b) {
   return b.points != null ? b.points : 1;
 }
 function dailyPoolFromBlocks(blocks) {
-  return blocks.slice(0, DAILY_CAP_BLOCKS).reduce((a, b) => a + blockPoints(b), 0);
+  return blocks.reduce((a, b) => a + blockPoints(b), 0);
 }
 function pointsForWork(workId) {
   if (!workId) return 1;
@@ -133,6 +133,7 @@ function defaultState() {
     revenueLog: [],
     categories: [],
     activeBlock: null,
+    activeSpend: null,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
     spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
@@ -191,6 +192,7 @@ let lightboxImage = null;
 let editingBlockId = null;
 let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
+let notifiedKey = null;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -274,10 +276,35 @@ function startTicking() {
 function onTick() {
   if (!state) return;
   updateTimerDisplay();
+  updateSpendTimerDisplay();
+  maybeNotifyTimerDone();
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
     if (reconcileSavings()) persistAndRender();
   }
+}
+
+// Notifies once (not on every tick) when the active block/break first
+// crosses its target duration — a nudge for the manual-only timer.
+function maybeNotifyTimerDone() {
+  if (!state.activeBlock) return;
+  const { id, phase: p, startedAt, task } = state.activeBlock;
+  const durationMs = (p === "work" ? WORK_MIN : BREAK_MIN) * 60000;
+  const key = `${id}-${p}`;
+  if (Date.now() - startedAt < durationMs || notifiedKey === key) return;
+  notifiedKey = key;
+  sendNotification(
+    p === "work" ? "작업 시간 완료" : "휴식 시간 완료",
+    p === "work" ? `"${task}" 목표 시간(${WORK_MIN}분)이 됐어요. 완료를 눌러주세요.` : "휴식 목표 시간이 끝났어요. 다음 블록을 시작해주세요."
+  );
+}
+function sendNotification(title, body) {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  try { new Notification(title, { body, tag: "wl-timer" }); } catch (e) { /* unsupported in this context */ }
+}
+function requestNotifications() {
+  if (typeof Notification === "undefined" || Notification.permission !== "default") { render(); return; }
+  Notification.requestPermission().then(() => render());
 }
 
 function persistAndRender() {
@@ -332,8 +359,7 @@ function computeToday() {
   const dailyPool = dailyPoolFromBlocks(todayBlocks);
   const dailySpent = spentTotal(todaySpends);
   const dailyAvailable = dailyPool - dailySpent;
-  const overflowPoints = todayBlocks.slice(DAILY_CAP_BLOCKS).reduce((a, b) => a + blockPoints(b), 0);
-  return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowPoints };
+  return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable };
 }
 
 // ---- actions: timer + continuous block queue ----
@@ -386,10 +412,7 @@ function completeActiveBlock() {
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
     completedAt, points, minutes,
   };
-  const newBlocks = [...blocks, newBlock];
-  const overflow = newBlocks.length > DAILY_CAP_BLOCKS;
-  state.blocksByDate[day] = newBlocks;
-  if (overflow) state.savings += points;
+  state.blocksByDate[day] = [...blocks, newBlock];
   drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
@@ -423,9 +446,9 @@ function reorderArray(arr, fromIndex, toIndex) {
 }
 
 // ---- actions: spend / savings ----
+// No cap check here — going negative is allowed; it just eats into savings
+// the next time reconcileSavings runs.
 function spend(label, cost) {
-  const { dailyAvailable } = computeToday();
-  if (cost > dailyAvailable) return;
   const day = todayKey();
   const list = state.spendsByDate[day] || [];
   state.spendsByDate[day] = [...list, { id: uid(), label, cost, at: Date.now() }];
@@ -437,6 +460,25 @@ function addCustomSpend() {
   spend(drafts.customSpendLabel.trim(), cost);
   drafts.customSpendLabel = "";
   drafts.customSpendCost = "";
+}
+
+// ---- actions: spend timer (presets run continuously until stopped) ----
+function spendElapsedPoints(activeSpend, now) {
+  const minutes = ((now != null ? now : Date.now()) - activeSpend.startedAt) / 60000;
+  return Math.round((minutes / 60) * activeSpend.costPerHour);
+}
+function startSpendTimer(label, costPerHour) {
+  if (state.activeSpend) return;
+  state.activeSpend = { label, costPerHour, startedAt: Date.now() };
+  persistAndRender();
+}
+function stopSpendTimer() {
+  const active = state.activeSpend;
+  if (!active) return;
+  const cost = spendElapsedPoints(active);
+  state.activeSpend = null;
+  if (cost > 0) spend(active.label, cost);
+  else persistAndRender();
 }
 function useOffDay() {
   if (state.savings < OFFDAY_COST) return;
@@ -949,6 +991,16 @@ function updateTimerDisplay() {
   barEl.classList.toggle("is-overtime", overtime);
 }
 
+function updateSpendTimerDisplay() {
+  if (currentTab !== "dashboard" || !state.activeSpend) return;
+  const clockEl = document.getElementById("wl-spend-clock");
+  const costEl = document.getElementById("wl-spend-cost-live");
+  if (!clockEl || !costEl) return;
+  const elapsedMs = Date.now() - state.activeSpend.startedAt;
+  clockEl.textContent = formatClock(elapsedMs);
+  costEl.textContent = `지금까지 -${spendElapsedPoints(state.activeSpend)}점 소비 중 · 끄기 전까지 계속 소비돼요`;
+}
+
 function renderQueueItem(item, idx) {
   const w = item.workId ? state.works.find((x) => x.id === item.workId) : null;
   return `
@@ -1059,19 +1111,36 @@ function renderProjectsStatusColumn() {
 }
 
 // ---- render: column 3 — today summary ----
-function renderSpendPresetButtons(dailyAvailable) {
+function renderSpendPresetButtons() {
   return `
     <div class="wl-spend-row">
       ${state.spendPresets.map((p) => `
-        <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}" ${p.cost > dailyAvailable ? "disabled" : ""}>
+        <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}">
           <span>${escapeHtml(p.label)}</span>
-          <span class="wl-spend-cost">${p.cost}점</span>
+          <span class="wl-spend-cost">${p.cost}점/시간</span>
         </button>`).join("")}
     </div>
     <div class="wl-field-row wl-field-row--tight">
       <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="customSpendLabel" value="${escapeAttr(drafts.customSpendLabel)}" />
       <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="customSpendCost" value="${escapeAttr(drafts.customSpendCost)}" />
       <button class="wl-btn wl-btn--ghost" data-action="addCustomSpend">${ICONS.plus}</button>
+    </div>`;
+}
+
+function renderActiveSpendTimer() {
+  const active = state.activeSpend;
+  const elapsedMs = Date.now() - active.startedAt;
+  const cost = spendElapsedPoints(active);
+  return `
+    <div class="wl-timer">
+      <div class="wl-timer-top">
+        <span class="wl-timer-phase is-spend">${ICONS.square} ${escapeHtml(active.label)}</span>
+        <span class="wl-timer-clock" id="wl-spend-clock">${formatClock(elapsedMs)}</span>
+      </div>
+      <div class="wl-hint" id="wl-spend-cost-live">지금까지 -${cost}점 소비 중 · 끄기 전까지 계속 소비돼요</div>
+      <div class="wl-timer-actions">
+        <button class="wl-btn wl-btn--primary wl-btn--full" data-action="stopSpendTimer">${ICONS.check} 끄기</button>
+      </div>
     </div>`;
 }
 
@@ -1101,12 +1170,12 @@ function renderSpendPresetsEditor() {
 }
 
 function renderTodaySummaryColumn() {
-  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable, overflowPoints } = computeToday();
+  const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable } = computeToday();
   return `
     <section class="wl-ledger-strip">
-      ${figure("오늘 적립", `${dailyPool}${overflowPoints ? ` +${overflowPoints}` : ""}`)}
+      ${figure("오늘 적립", dailyPool)}
       ${figure("오늘 사용", dailySpent)}
-      ${figure("오늘 가용", Math.max(0, dailyAvailable), "work")}
+      ${figure("오늘 가용", dailyAvailable, dailyAvailable < 0 ? "spend" : "work")}
       ${figure("저축", state.savings, "save")}
     </section>
     <section class="wl-card">
@@ -1114,7 +1183,7 @@ function renderTodaySummaryColumn() {
         <div class="wl-card-title" style="margin-bottom:0">소비</div>
         <button class="wl-icon-btn" data-action="toggleSpendPresetsEdit">${spendPresetsEditOpen ? ICONS.check : ICONS.pencil}</button>
       </div>
-      ${spendPresetsEditOpen ? renderSpendPresetsEditor() : renderSpendPresetButtons(dailyAvailable)}
+      ${spendPresetsEditOpen ? renderSpendPresetsEditor() : (state.activeSpend ? renderActiveSpendTimer() : renderSpendPresetButtons())}
     </section>
     <section class="wl-card">
       <div class="wl-card-title">오늘의 기록</div>
@@ -1475,6 +1544,9 @@ function renderShell() {
           <div class="wl-brand">작업 장부</div>
           <div class="wl-header-right">
             <div class="wl-date">${escapeHtml(formatKDate(new Date()))}</div>
+            ${typeof Notification !== "undefined" ? `
+              <button class="wl-icon-btn ${Notification.permission === "granted" ? "is-active" : ""}" data-action="requestNotifications" title="${Notification.permission === "granted" ? "타이머 알림 켜짐" : "타이머 알림 받기"}">${ICONS.bell}</button>
+            ` : ""}
             <button class="wl-icon-btn" data-action="openSettings" title="설정">${ICONS.gear}</button>
           </div>
         </div>
@@ -1584,7 +1656,8 @@ function runAction(name, ds) {
     case "finishEarly": finishEarly(); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
-    case "spendPreset": spend(ds.label, Number(ds.cost)); break;
+    case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
+    case "stopSpendTimer": stopSpendTimer(); break;
     case "addCustomSpend": addCustomSpend(); break;
     case "useOffDay": useOffDay(); break;
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
@@ -1594,6 +1667,7 @@ function runAction(name, ds) {
     case "saveEditSpendPreset": saveEditSpendPreset(); break;
     case "cancelEditSpendPreset": cancelEditSpendPreset(); break;
     case "openSettings": openSettings(); break;
+    case "requestNotifications": requestNotifications(); break;
     case "closeSettings": closeSettings(); break;
     case "saveSettings": submitSettings(); break;
     case "testSettings": testSettingsForm(); break;

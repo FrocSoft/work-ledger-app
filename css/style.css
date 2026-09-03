@@ -137,6 +137,7 @@ body {
 .wl-figure-value { font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; }
 .wl-figure-value.is-work { color: var(--wl-work); }
 .wl-figure-value.is-save { color: var(--wl-save); }
+.wl-figure-value.is-spend { color: var(--wl-spend); }
 
 .wl-card { border: 1px solid var(--wl-border); background: var(--wl-surface); border-radius: 3px; padding: 14px; }
 .wl-card--center { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
@@ -196,11 +197,13 @@ body {
 .wl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .wl-icon-btn { background: none; border: none; color: var(--wl-text-muted); cursor: pointer; padding: 4px; display: inline-flex; }
 .wl-icon-btn:hover { color: var(--wl-text); }
+.wl-icon-btn.is-active { color: var(--wl-work); }
 
 .wl-timer { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .wl-timer-top { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 6px; }
 .wl-timer-phase { font-size: 11px; color: var(--wl-work); display: flex; align-items: center; gap: 5px; }
 .wl-timer-phase.is-break { color: var(--wl-save); }
+.wl-timer-phase.is-spend { color: var(--wl-spend); }
 .wl-timer-clock { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--wl-text-muted); }
 .wl-timer-clock.is-overtime { color: var(--wl-spend); font-weight: 600; }
 .wl-timer-task { font-size: 15px; margin-bottom: 10px; }
