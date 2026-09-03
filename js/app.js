@@ -974,10 +974,26 @@ function renderTierRow(t, totalRevenue, showActions, catId) {
     </li>`;
 }
 
+function renderGoalTierPreview(t, totalRevenue) {
+  const unlocked = totalRevenue >= t.targetAmount;
+  const pct = unlocked ? 100 : Math.min(100, Math.round((totalRevenue / t.targetAmount) * 100));
+  return `
+    <div class="wl-goal-next">
+      ${t.image ? `<img src="${t.image}" class="wl-goal-next-img" alt="${escapeAttr(t.label)}" />` : `<div class="wl-goal-next-img wl-goal-next-img--empty">${ICONS.sparkles}</div>`}
+      <div class="wl-goal-next-body">
+        <div class="wl-goal-next-label">${escapeHtml(t.label)}${unlocked ? `<span class="wl-goal-next-badge">구매 가능</span>` : ""}</div>
+        <div class="wl-progress">
+          <div class="wl-progress-bar"><div class="wl-progress-fill is-sales" style="width:${pct}%"></div></div>
+          <span class="wl-progress-label">${pct}%</span>
+        </div>
+        <div class="wl-hint">제품가 ${t.actualPrice.toLocaleString()}원 · 목표 ${t.targetAmount.toLocaleString()}원</div>
+      </div>
+    </div>`;
+}
+
 function renderCategoryGoalCard(c, totalRevenue) {
   const tiers = c.tiers.slice().sort((a, b) => a.targetAmount - b.targetAmount);
   const nextTier = tiers.find((t) => t.targetAmount > totalRevenue);
-  const pct = nextTier ? Math.min(100, Math.round((totalRevenue / nextTier.targetAmount) * 100)) : 100;
   const expanded = !!expandedGoalCats[c.id];
   return `
     <section class="wl-card wl-goal-cat-card">
@@ -985,19 +1001,11 @@ function renderCategoryGoalCard(c, totalRevenue) {
         <span class="wl-goal-cat-name">${escapeHtml(c.name)}</span>
         <span class="wl-goal-cat-toggle-icon ${expanded ? "is-expanded" : ""}">${ICONS.chevron}</span>
       </button>
-      ${nextTier ? `
-        <div class="wl-goal-next">
-          ${nextTier.image ? `<img src="${nextTier.image}" class="wl-goal-next-img" alt="${escapeAttr(nextTier.label)}" />` : `<div class="wl-goal-next-img wl-goal-next-img--empty">${ICONS.sparkles}</div>`}
-          <div class="wl-goal-next-body">
-            <div class="wl-goal-next-label">${escapeHtml(nextTier.label)}</div>
-            <div class="wl-progress">
-              <div class="wl-progress-bar"><div class="wl-progress-fill is-sales" style="width:${pct}%"></div></div>
-              <span class="wl-progress-label">${pct}%</span>
-            </div>
-            <div class="wl-hint">${(nextTier.targetAmount - totalRevenue).toLocaleString()}원 남음</div>
-          </div>
-        </div>` : `<div class="wl-empty">이 카테고리 목표를 모두 달성했어요.</div>`}
-      ${expanded ? `<ul class="wl-tiers" style="margin-top:10px">${tiers.map((t) => renderTierRow(t, totalRevenue, false, c.id)).join("")}</ul>` : ""}
+      ${expanded
+        ? (tiers.length > 0
+            ? `<div class="wl-goal-tier-list">${tiers.map((t) => renderGoalTierPreview(t, totalRevenue)).join("")}</div>`
+            : `<div class="wl-empty" style="margin-top:10px">등록된 가격대가 없어요.</div>`)
+        : (nextTier ? renderGoalTierPreview(nextTier, totalRevenue) : `<div class="wl-empty" style="margin-top:10px">이 카테고리 목표를 모두 달성했어요.</div>`)}
     </section>`;
 }
 

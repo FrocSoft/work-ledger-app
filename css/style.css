@@ -273,11 +273,15 @@ body {
 .wl-archive-row:last-child { border-bottom: none; }
 .wl-archive-row .wl-work-name { flex: 1; font-weight: 400; }
 .wl-archive-row .wl-btn { padding: 6px 10px; font-size: 12px; }
-.wl-goal-next { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-.wl-goal-next-img { width: 100%; height: 160px; object-fit: cover; border-radius: 3px; }
+.wl-goal-next { display: flex; gap: 10px; margin-top: 10px; }
+.wl-goal-next-img { width: 60px; height: 60px; flex-shrink: 0; object-fit: cover; border-radius: 3px; }
 .wl-goal-next-img--empty { display: flex; align-items: center; justify-content: center; background: var(--wl-surface-2); color: var(--wl-text-muted); }
-.wl-goal-next-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.wl-goal-next-body { flex: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .wl-goal-next-label { font-size: 13.5px; font-weight: 600; }
+.wl-goal-next-badge { font-size: 10.5px; font-weight: 600; color: var(--wl-sales); margin-left: 6px; }
+.wl-goal-tier-list { margin-top: 10px; }
+.wl-goal-tier-list .wl-goal-next { margin-top: 0; }
+.wl-goal-tier-list .wl-goal-next + .wl-goal-next { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wl-border); }
 
 .wl-imgpick {
   display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--wl-border);
