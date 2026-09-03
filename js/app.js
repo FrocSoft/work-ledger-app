@@ -1242,13 +1242,17 @@ function renderGoalsColumn() {
       </section>` : ""}`;
 }
 
+function columnLabel(text) {
+  return `<div class="wl-col-label">${escapeHtml(text)}</div>`;
+}
+
 function renderDashboard() {
   return `
     <div class="wl-dashboard-grid">
-      <div class="wl-dash-col">${renderTimeBlockColumn()}</div>
+      <div class="wl-dash-col">${columnLabel("타임 블록")}${renderTimeBlockColumn()}</div>
       <div class="wl-dash-col">${renderProjectsStatusColumn()}</div>
-      <div class="wl-dash-col">${renderTodaySummaryColumn()}</div>
-      <div class="wl-dash-col">${renderSavingsCard()}${renderGoalsColumn()}</div>
+      <div class="wl-dash-col">${columnLabel("오늘 요약")}${renderTodaySummaryColumn()}</div>
+      <div class="wl-dash-col">${columnLabel("저축 · 목표")}${renderSavingsCard()}${renderGoalsColumn()}</div>
     </div>`;
 }
 
