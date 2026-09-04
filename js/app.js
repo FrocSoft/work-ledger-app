@@ -205,6 +205,7 @@ let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
 let notifiedKey = null;
 let renderedDay = null;
+let resetConfirm = null;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -892,11 +893,13 @@ function openSettings() {
   drafts.settings = getCredentials();
   drafts.settingsMsg = null;
   settingsOpen = true;
+  resetConfirm = null;
   render();
 }
 function closeSettings() {
   if (!hasCredentials()) return;
   settingsOpen = false;
+  resetConfirm = null;
   render();
 }
 function settingsErrorText(reason) {
@@ -942,6 +945,42 @@ async function submitSettings() {
   drafts.settingsBusy = false;
   settingsOpen = false;
   await boot();
+}
+// Two-step: the first click only arms the button, so a stray tap on mobile
+// can't wipe the ledger.
+function askReset(scope) {
+  resetConfirm = scope;
+  render();
+}
+function cancelReset() {
+  resetConfirm = null;
+  render();
+}
+function doReset(scope) {
+  if (resetConfirm !== scope) return;
+  const fresh = defaultState();
+  if (scope === "all") {
+    state = fresh;
+  } else {
+    state = {
+      ...fresh,
+      works: state.works.map((w) => ({ ...w, updates: [] })),
+      categories: state.categories,
+      tags: state.tags,
+      spendPresets: state.spendPresets,
+    };
+  }
+  resetConfirm = null;
+  editingBlockId = null;
+  editingWorkId = null;
+  editingCategoryId = null;
+  editingTagId = null;
+  editingPresetId = null;
+  notifiedKey = null;
+  drafts.queueDraft = { task: "", workId: "", subtaskId: "" };
+  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
+  settingsOpen = false;
+  persistAndRender();
 }
 function doLogout() {
   if (!confirm("로그아웃하고 이 브라우저에 저장된 GitHub 접속 정보를 지울까요?")) return;
@@ -1633,6 +1672,33 @@ function renderLoadError() {
     </div>`;
 }
 
+function renderResetSection() {
+  const blockCount = Object.values(state.blocksByDate).reduce((a, list) => a + list.length, 0);
+  const spendCount = Object.values(state.spendsByDate).reduce((a, list) => a + list.length, 0);
+  const armed = (scope, label, warning) => `
+    <div class="wl-reset-armed">
+      <div class="wl-reset-warning">${warning}</div>
+      <div class="wl-settings-actions">
+        <button class="wl-btn wl-btn--danger" data-action="confirmReset" data-scope="${scope}">${label}</button>
+        <button class="wl-btn wl-btn--ghost" data-action="cancelReset">취소</button>
+      </div>
+    </div>`;
+  return `
+    <div class="wl-reset">
+      <div class="wl-settings-label">초기화</div>
+      <div class="wl-hint">지금 저장된 기록: 블록 ${blockCount}개 · 소비 ${spendCount}건 · 저축 ${state.savings}점 · 할일 ${state.works.length}개</div>
+      ${resetConfirm === "data"
+        ? armed("data", "기록 지우기", `블록·소비·저축·수익 기록과 세션 기록을 모두 지웁니다. 할일 목록, 태그, 소비 항목, 목표 설정은 남습니다. 되돌릴 수 없어요.`)
+        : resetConfirm === "all"
+          ? armed("all", "전부 지우기", `할일, 태그, 소비 항목, 목표까지 포함해 처음 상태로 되돌립니다. 되돌릴 수 없어요.`)
+          : `
+            <div class="wl-settings-actions">
+              <button class="wl-btn wl-btn--ghost" data-action="askReset" data-scope="data">기록만 초기화</button>
+              <button class="wl-btn wl-btn--ghost" data-action="askReset" data-scope="all">전체 초기화</button>
+            </div>`}
+    </div>`;
+}
+
 function renderSettingsOverlay() {
   const s = drafts.settings || getCredentials();
   const canClose = hasCredentials();
@@ -1674,7 +1740,8 @@ function renderSettingsOverlay() {
           <div class="wl-settings-actions">
             <button class="wl-btn wl-btn--ghost" data-action="closeSettings">닫기</button>
             <button class="wl-btn wl-btn--ghost" data-action="logout">로그아웃</button>
-          </div>` : ""}
+          </div>
+          ${state ? renderResetSection() : ""}` : ""}
       </div>
     </div>`;
 }
@@ -1730,6 +1797,9 @@ function runAction(name, ds) {
     case "saveSettings": submitSettings(); break;
     case "testSettings": testSettingsForm(); break;
     case "logout": doLogout(); break;
+    case "askReset": askReset(ds.scope); break;
+    case "cancelReset": cancelReset(); break;
+    case "confirmReset": doReset(ds.scope); break;
     case "switchTab": switchTab(ds.tab); break;
     case "retryLoad": boot(); break;
     case "addWork": addWork(); break;
