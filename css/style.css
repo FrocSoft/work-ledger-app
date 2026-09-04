@@ -194,6 +194,7 @@ body {
 .wl-btn--full { width: 100%; }
 .wl-btn--primary:disabled { background: var(--wl-surface-2); border-color: var(--wl-border); color: var(--wl-text-muted); cursor: not-allowed; }
 .wl-btn--ghost { background: none; }
+.wl-btn--danger { background: var(--wl-spend); border-color: var(--wl-spend); color: #1B1917; font-weight: 600; }
 .wl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .wl-icon-btn { background: none; border: none; color: var(--wl-text-muted); cursor: pointer; padding: 4px; display: inline-flex; }
 .wl-icon-btn:hover { color: var(--wl-text); }
@@ -348,6 +349,12 @@ body {
 .wl-settings-msg { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 2px; }
 .wl-settings-msg--error { background: rgba(192, 104, 74, 0.15); border: 1px solid var(--wl-spend); }
 .wl-settings-msg--ok { background: rgba(143, 168, 118, 0.15); border: 1px solid var(--wl-work); }
+.wl-reset { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--wl-border); }
+.wl-reset .wl-hint { margin-top: 4px; line-height: 1.5; }
+.wl-reset-warning {
+  font-size: 12px; line-height: 1.55; margin-top: 12px; padding: 10px;
+  border-radius: 2px; background: rgba(192, 104, 74, 0.12); border: 1px solid var(--wl-spend);
+}
 
 .wl-loading { padding: 60px 18px; text-align: center; color: var(--wl-text-muted); font-size: 13px; }
 .wl-loading-error { color: var(--wl-spend); margin-bottom: 12px; }
