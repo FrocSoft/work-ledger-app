@@ -1564,7 +1564,10 @@ function blockNotes(blockId) {
   return out;
 }
 function renderBlockLogRow(b) {
-  const segs = blockSegments(b);
+  // A stretch that rounded to zero minutes (switching 할일 right after a
+  // switch, or a block ended immediately) is noise in the log.
+  const segs = blockSegments(b).filter((s) => s.minutes > 0);
+  if (segs.length === 0) return "";
   const tasks = [...new Set(segs.map((s) => s.task).filter(Boolean))];
   const notes = blockNotes(b.id);
   return `
