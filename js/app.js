@@ -216,6 +216,17 @@ function normalizeState(s) {
   s.queue = s.queue || [];
   s.borrowedByDate = s.borrowedByDate || {};
   s.collapsedWorks = s.collapsedWorks || {};
+  // 진행 중/대기 구분이 없던 상태에서 넘어올 때는, 최근에 기록이 있던
+  // 프로젝트 순으로 한도만큼만 진행 중으로 올려둡니다. 그 뒤로는 수동입니다.
+  if (!s.works.some((w) => w.wip !== undefined)) {
+    const recent = s.works
+      .filter((w) => !w.archived && (w.updates || []).length > 0)
+      .sort((a, b) => (b.updates[0].at || 0) - (a.updates[0].at || 0))
+      .slice(0, WIP_LIMIT)
+      .map((w) => w.id);
+    s.works.forEach((w) => { w.wip = recent.includes(w.id); });
+  }
+  s.works.forEach((w) => { w.wip = w.wip === true; });
   return s;
 }
 
@@ -1251,6 +1262,56 @@ function formatMinutes(mins) {
   const m = mins % 60;
   return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
 }
+// 동시에 진행할 프로젝트 수의 상한. 리틀의 법칙대로 진행 중이 늘어날수록
+// 하나가 끝나는 데 걸리는 시간이 비례해서 늘어나기 때문에, 한도를 두고
+// 넘길 때 무엇을 내릴지 직접 고르게 합니다. (자동 선정은 제약이 아닙니다.)
+const WIP_LIMIT = 3;
+function wipWorks() {
+  return state.works.filter((w) => !w.archived && w.wip);
+}
+function backlogWorks() {
+  return state.works.filter((w) => !w.archived && !w.wip);
+}
+// 마지막으로 이 프로젝트를 실제로 건드린 시각 — 기록이든 블록이든.
+function workLastTouched(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  let last = (w && w.updates && w.updates[0] && w.updates[0].at) || 0;
+  Object.values(state.blocksByDate).forEach((blocks) => {
+    (blocks || []).forEach((b) => {
+      // 0분짜리 조각은 손댄 걸로 치지 않습니다 — 오늘의 기록에서 숨기는 것과
+      // 같은 기준이라야 "오늘 했다"는 표시가 거짓이 되지 않습니다.
+      if (blockSegments(b).some((s) => s.workId === workId && s.minutes > 0)) {
+        last = Math.max(last, b.completedAt || 0);
+      }
+    });
+  });
+  return last || null;
+}
+function daysSince(at) {
+  if (!at) return null;
+  const a = new Date(at); a.setHours(0, 0, 0, 0);
+  const b = new Date(); b.setHours(0, 0, 0, 0);
+  return Math.round((b - a) / 86400000);
+}
+// 조용히 죽어가는 프로젝트는 "며칠째 안 건드렸나"로만 보입니다.
+function agingLabel(workId) {
+  const days = daysSince(workLastTouched(workId));
+  if (days === null) return { text: "아직 시작 안 함", stale: false, never: true };
+  if (days === 0) return { text: "오늘", stale: false };
+  if (days === 1) return { text: "어제", stale: false };
+  return { text: `${days}일 전`, stale: days >= 7 };
+}
+function toggleWorkWip(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  if (!w.wip && wipWorks().length >= WIP_LIMIT) {
+    window.alert(`진행 중은 ${WIP_LIMIT}개까지예요.\n먼저 하나를 대기로 내려주세요.`);
+    return;
+  }
+  w.wip = !w.wip;
+  persistAndRender();
+}
+
 function workSessionStats(workId) {
   let count = 0;
   let minutes = 0;
@@ -1887,9 +1948,13 @@ function renderProjectStatusRow(w) {
   const total = (w.subtasks || []).length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const stats = workSessionStats(w.id);
+  const aging = agingLabel(w.id);
   return `
     <section class="wl-card wl-project-card">
-      <div class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}</div>
+      <div class="wl-work-head">
+        <div class="wl-work-name" style="margin-bottom:0">${escapeHtml(w.name)}${workTagBadge(w)}</div>
+        <span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>
+      </div>
       ${total > 0 ? `
         <div class="wl-progress">
           <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
@@ -1911,20 +1976,32 @@ function renderProjectStatusRow(w) {
 }
 
 function renderProjectsStatusColumn() {
-  // Most recently updated first — this column is about what's moving, so it
-  // deliberately ignores the manual order set in 할일 관리.
-  const sorted = state.works.filter((w) => !w.archived).sort((a, b) => {
-    const aAt = (a.updates && a.updates[0] && a.updates[0].at) || 0;
-    const bAt = (b.updates && b.updates[0] && b.updates[0].at) || 0;
-    return bAt - aAt;
-  });
+  // 진행 중인 것만 카드로 세웁니다. 시작도 안 한 프로젝트를 같은 크기로
+  // 늘어놓으면 재고를 진행 중인 것처럼 보여주는 셈이고, "다음에 뭘 하지"에
+  // 아무 답도 못 줍니다. 대기는 아래에 이름만 한 줄로.
+  const wip = wipWorks().sort((a, b) => (workLastTouched(b.id) || 0) - (workLastTouched(a.id) || 0));
+  const backlog = backlogWorks();
+  const none = wip.length === 0 && backlog.length === 0;
   return `
     <div class="wl-work-head wl-col-head">
-      <div class="wl-card-title" style="margin-bottom:0">프로젝트 최신 상황</div>
+      <div class="wl-card-title" style="margin-bottom:0">진행 중 <span class="wl-wip-count ${wip.length >= WIP_LIMIT ? "is-full" : ""}">${wip.length}/${WIP_LIMIT}</span></div>
       <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
     </div>
-    ${sorted.length === 0 ? `<section class="wl-card"><div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div></section>` : ""}
-    ${sorted.map(renderProjectStatusRow).join("")}`;
+    ${none ? `<section class="wl-card"><div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div></section>` : ""}
+    ${!none && wip.length === 0 ? `<section class="wl-card"><div class="wl-empty wl-empty--pad">진행 중인 프로젝트가 없어요. '할일 관리'에서 ${WIP_LIMIT}개까지 올릴 수 있어요.</div></section>` : ""}
+    ${wip.map(renderProjectStatusRow).join("")}
+    ${backlog.length > 0 ? `
+      <section class="wl-card wl-backlog">
+        <div class="wl-card-title" style="margin-bottom:8px">대기 ${backlog.length}개</div>
+        ${backlog.map((w) => {
+          const aging = agingLabel(w.id);
+          return `
+          <div class="wl-backlog-row">
+            <span class="wl-backlog-name">${escapeHtml(w.name)}</span>
+            <span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>
+          </div>`;
+        }).join("")}
+      </section>` : ""}`;
 }
 
 // ---- render: column 3 — today summary ----
@@ -2300,6 +2377,8 @@ function renderWorkManageCard(w) {
             </button>
           </div>
           <div>
+            <button class="wl-wip-toggle ${w.wip ? "is-on" : ""}" data-action="toggleWorkWip" data-work="${w.id}"
+                    title="${w.wip ? "대기로 내리기" : "진행 중으로 올리기"}">${w.wip ? "진행 중" : "대기"}</button>
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
             <button class="wl-icon-btn" data-action="archiveWork" data-work="${w.id}" title="보관">${ICONS.archive}</button>
             <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
@@ -2396,7 +2475,7 @@ function renderWorksManage() {
       </section>
       ${active.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : `
         <div class="wl-work-head wl-col-head">
-          <span class="wl-hint">할일 ${active.length}개</span>
+          <span class="wl-hint">할일 ${active.length}개 · 진행 중 ${wipWorks().length}/${WIP_LIMIT}</span>
           <button class="wl-cost-toggle" data-action="toggleAllWorkCollapse">
             ${anyWorkExpanded() ? "모두 접기" : "모두 펴기"}
           </button>
@@ -2680,6 +2759,7 @@ function runAction(name, ds) {
     case "toggleWorkCollapse": toggleWorkCollapse(ds.work); break;
     case "toggleAllWorkCollapse": toggleAllWorkCollapse(); break;
     case "archiveWork": archiveWork(ds.work); break;
+    case "toggleWorkWip": toggleWorkWip(ds.work); break;
     case "unarchiveWork": unarchiveWork(ds.work); break;
     case "toggleArchiveSection": toggleArchiveSection(); break;
     case "addSubtask": addSubtask(ds.work); break;

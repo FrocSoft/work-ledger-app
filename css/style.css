@@ -218,6 +218,20 @@ body {
 .wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .wl-timer-actions .wl-btn { flex: 1 1 40%; }
+/* WIP limit: 진행 중 count, the per-project toggle, and the aging label that
+   makes a quietly dying project visible. */
+.wl-wip-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--wl-text-muted); margin-left: 4px; }
+.wl-wip-count.is-full { color: var(--wl-save); }
+.wl-wip-toggle {
+  font: inherit; font-size: 10.5px; padding: 3px 8px; border-radius: 10px; cursor: pointer;
+  background: none; border: 1px solid var(--wl-border); color: var(--wl-text-muted); vertical-align: middle;
+}
+.wl-wip-toggle.is-on { border-color: var(--wl-work); color: var(--wl-work); }
+.wl-aging { font-size: 10.5px; color: var(--wl-text-muted); white-space: nowrap; flex: 0 0 auto; }
+.wl-aging.is-stale { color: var(--wl-spend); }
+.wl-backlog-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; font-size: 12.5px; }
+.wl-backlog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wl-text-muted); }
+
 /* Manual entry for work done off the timer. */
 .wl-manual { padding: 10px 0 4px; border-bottom: 1px solid var(--wl-border); margin-bottom: 10px; }
 .wl-manual .wl-field-row { margin-top: 8px; }
