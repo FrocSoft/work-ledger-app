@@ -263,7 +263,7 @@ body {
 
 .wl-hint { font-size: 11.5px; color: var(--wl-text-muted); }
 .wl-work-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.wl-work-head-left { display: flex; align-items: center; gap: 8px; }
+.wl-work-head-left { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .wl-work-name { font-size: 14.5px; font-weight: 600; }
 .wl-work-expected { font-weight: 400; color: var(--wl-text-muted); font-size: 12px; }
 .wl-work-tag { font-weight: 600; color: var(--wl-work); font-size: 11px; }
@@ -402,9 +402,14 @@ body {
 .wl-tier-actual { color: var(--wl-text-muted); }
 
 /* drag-and-drop reordering */
-.wl-subtask-row--draggable { cursor: grab; }
-.wl-drag-handle { display: inline-flex; cursor: grab; }
-[data-drag-kind].is-dragging { opacity: 0.4; }
+.wl-drag-handle {
+  display: inline-flex; align-items: center; cursor: grab; color: var(--wl-text-muted);
+  flex: 0 0 auto; touch-action: none; -webkit-user-select: none; user-select: none;
+  padding: 4px 2px; margin: -4px -2px; /* bigger touch target without shifting layout */
+}
+.wl-drag-handle:active { cursor: grabbing; }
+[data-drag-item].is-dragging { opacity: 0.45; }
+[data-drag-item].is-drop-target { outline: 2px solid var(--wl-work); outline-offset: 2px; }
 
 /* continuous session queue */
 .wl-queue-list { list-style: none; margin: 10px 0 0; padding: 0; }

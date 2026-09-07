@@ -655,6 +655,16 @@ function removeSubtask(workId, subId) {
   w.subtasks = w.subtasks.filter((s) => s.id !== subId);
   persistAndRender();
 }
+// Moves by id, not list position: the manage list hides archived works, so a
+// position in what you see doesn't match a position in state.works.
+function reorderWorks(fromId, toId) {
+  if (!fromId || !toId || fromId === toId) return;
+  const from = state.works.findIndex((w) => w.id === fromId);
+  const to = state.works.findIndex((w) => w.id === toId);
+  if (from < 0 || to < 0) return;
+  reorderArray(state.works, from, to);
+  persistAndRender();
+}
 function reorderSubtasks(workId, fromIndex, toIndex) {
   const w = state.works.find((x) => x.id === workId);
   if (!w || fromIndex === toIndex) return;
@@ -1091,8 +1101,8 @@ function updateSpendTimerDisplay() {
 function renderQueueItem(item, idx) {
   const w = item.workId ? state.works.find((x) => x.id === item.workId) : null;
   return `
-    <li class="wl-queue-item" draggable="true" data-drag-kind="queue" data-index="${idx}">
-      ${ICONS.grip}
+    <li class="wl-queue-item" data-drag-item="queue">
+      <span class="wl-drag-handle" data-drag-handle="queue">${ICONS.grip}</span>
       <span class="wl-queue-index">${idx + 1}</span>
       <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml(w.name)}</span>` : ""}</span>
       <button class="wl-icon-btn" data-action="removeFromQueue" data-id="${item.id}">${ICONS.x}</button>
@@ -1431,7 +1441,7 @@ function renderWorkManageCard(w) {
   const collapsed = !!collapsedWorks[w.id];
   const stats = workSessionStats(w.id);
   return `
-    <section class="wl-card">
+    <section class="wl-card" data-drag-item="work" data-work="${w.id}">
       <div class="wl-work-head">
         ${isEditing ? `
           <div class="wl-field-row wl-field-row--tight wl-field-row--wrap" style="flex:1;margin:0">
@@ -1444,10 +1454,13 @@ function renderWorkManageCard(w) {
             <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
             <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
           </div>` : `
-          <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
-            <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
-            <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}${stats.minutes > 0 ? `<span class="wl-work-expected"> · 총 ${formatMinutes(stats.minutes)}</span>` : ""}</span>
-          </button>
+          <div class="wl-work-head-left">
+            <span data-drag-handle="work" class="wl-drag-handle" title="드래그해서 순서 변경">${ICONS.grip}</span>
+            <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
+              <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
+              <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}${stats.minutes > 0 ? `<span class="wl-work-expected"> · 총 ${formatMinutes(stats.minutes)}</span>` : ""}</span>
+            </button>
+          </div>
           <div>
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
             <button class="wl-icon-btn" data-action="archiveWork" data-work="${w.id}" title="보관">${ICONS.archive}</button>
@@ -1463,8 +1476,8 @@ function renderWorkManageCard(w) {
           ${w.subtasks.map((st, idx) => {
             const mins = subtaskMinutes(w.id, st.id);
             return `
-            <li class="wl-subtask-row wl-subtask-row--draggable" draggable="true" data-drag-kind="subtask" data-work="${w.id}" data-index="${idx}">
-              ${ICONS.grip}
+            <li class="wl-subtask-row" data-drag-item="subtask" data-work="${w.id}">
+              <span class="wl-drag-handle" data-drag-handle="subtask">${ICONS.grip}</span>
               <button class="wl-checkbox ${st.done ? "is-done" : ""}" data-action="toggleSubtask" data-work="${w.id}" data-sub="${st.id}">${st.done ? ICONS.check : ""}</button>
               <span class="wl-subtask-name ${st.done ? "is-done" : ""}">${escapeHtml(st.name)}</span>
               ${mins > 0 ? `<span class="wl-subtask-time">${mins}분</span>` : ""}
@@ -1587,7 +1600,7 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
   const draft = drafts.newTier[c.id] || {};
   const isEditingName = editingCategoryId === c.id;
   return `
-    <section class="wl-card" data-drag-kind="category" data-index="${idx}">
+    <section class="wl-card" data-drag-item="category">
       <div class="wl-work-head">
         ${isEditingName ? `
           <div class="wl-field-row wl-field-row--tight" style="flex:1;margin:0">
@@ -1596,7 +1609,7 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
             <button class="wl-icon-btn" data-action="cancelEditCategory">${ICONS.x}</button>
           </div>` : `
           <div class="wl-work-head-left">
-            <span draggable="true" data-drag-kind="category" data-index="${idx}" class="wl-drag-handle">${ICONS.grip}</span>
+            <span data-drag-handle="category" class="wl-drag-handle" title="드래그해서 순서 변경">${ICONS.grip}</span>
             <div class="wl-work-name">${escapeHtml(c.name)}</div>
           </div>
           <div>
@@ -1966,38 +1979,64 @@ async function onRootChange(e) {
   }
 }
 
-function onRootDragStart(e) {
-  const el = e.target.closest("[data-drag-kind]");
-  if (!el) return;
-  dragSource = { kind: el.dataset.dragKind, work: el.dataset.work || null, index: Number(el.dataset.index) };
-  el.classList.add("is-dragging");
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", el.dataset.index);
+// Reordering runs on pointer events rather than HTML5 drag-and-drop: native
+// dragging never fires from touch at all (so it did nothing on the phone) and
+// Safari is picky about it even with a mouse. Pointer events behave the same
+// everywhere. A drag starts from a grip handle only, so lists still scroll.
+function dragItemsFor(kind, scopeWorkId) {
+  const sel = scopeWorkId
+    ? `[data-drag-item="${kind}"][data-work="${scopeWorkId}"]`
+    : `[data-drag-item="${kind}"]`;
+  return [...document.querySelectorAll(sel)];
+}
+function targetIndexAt(items, y) {
+  for (let i = 0; i < items.length; i++) {
+    const r = items[i].getBoundingClientRect();
+    if (y <= r.bottom) return i;
   }
+  return items.length - 1;
 }
-function onRootDragOver(e) {
-  if (!dragSource) return;
-  const el = e.target.closest("[data-drag-kind]");
-  if (!el || el.dataset.dragKind !== dragSource.kind) return;
-  if (dragSource.kind === "subtask" && el.dataset.work !== dragSource.work) return;
-  e.preventDefault();
+function markDropTarget() {
+  dragSource.items.forEach((el, i) => el.classList.toggle("is-drop-target", i === dragSource.to && i !== dragSource.from));
 }
-function onRootDrop(e) {
-  if (!dragSource) return;
-  const el = e.target.closest("[data-drag-kind]");
-  if (!el || el.dataset.dragKind !== dragSource.kind) { dragSource = null; return; }
-  if (dragSource.kind === "subtask" && el.dataset.work !== dragSource.work) { dragSource = null; return; }
+function onPointerDown(e) {
+  if (e.button > 0) return;
+  const handle = e.target.closest("[data-drag-handle]");
+  if (!handle) return;
+  const kind = handle.dataset.dragHandle;
+  const item = handle.closest(`[data-drag-item="${kind}"]`);
+  if (!item) return;
   e.preventDefault();
-  const toIndex = Number(el.dataset.index);
-  if (dragSource.kind === "subtask") reorderSubtasks(dragSource.work, dragSource.index, toIndex);
-  else if (dragSource.kind === "queue" && toIndex !== dragSource.index) { reorderArray(state.queue, dragSource.index, toIndex); persistAndRender(); }
-  else if (dragSource.kind === "category" && toIndex !== dragSource.index) reorderCategories(dragSource.index, toIndex);
+  const scope = kind === "subtask" ? item.dataset.work : null;
+  const items = dragItemsFor(kind, scope);
+  const from = items.indexOf(item);
+  if (from < 0) return;
+  dragSource = { kind, item, items, from, to: from };
+  item.classList.add("is-dragging");
+  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* capture is best-effort */ }
+}
+function onPointerMove(e) {
+  if (!dragSource) return;
+  e.preventDefault();
+  dragSource.to = targetIndexAt(dragSource.items, e.clientY);
+  markDropTarget();
+}
+function onPointerUp() {
+  if (!dragSource) return;
+  const { kind, item, items, from, to } = dragSource;
+  item.classList.remove("is-dragging");
+  items.forEach((el) => el.classList.remove("is-drop-target"));
   dragSource = null;
+  if (to === from || to < 0) return;
+  if (kind === "work") reorderWorks(item.dataset.work, items[to].dataset.work);
+  else if (kind === "subtask") reorderSubtasks(item.dataset.work, from, to);
+  else if (kind === "queue") { reorderArray(state.queue, from, to); persistAndRender(); }
+  else if (kind === "category") reorderCategories(from, to);
 }
-function onRootDragEnd(e) {
-  const el = e.target.closest("[data-drag-kind]");
-  if (el) el.classList.remove("is-dragging");
+function onPointerCancel() {
+  if (!dragSource) return;
+  dragSource.item.classList.remove("is-dragging");
+  dragSource.items.forEach((el) => el.classList.remove("is-drop-target"));
   dragSource = null;
 }
 
@@ -2007,10 +2046,10 @@ function attachHandlers() {
   root.addEventListener("input", onRootInput);
   root.addEventListener("change", onRootChange);
   root.addEventListener("keydown", onRootKeydown);
-  root.addEventListener("dragstart", onRootDragStart);
-  root.addEventListener("dragover", onRootDragOver);
-  root.addEventListener("drop", onRootDrop);
-  root.addEventListener("dragend", onRootDragEnd);
+  root.addEventListener("pointerdown", onPointerDown);
+  root.addEventListener("pointermove", onPointerMove);
+  root.addEventListener("pointerup", onPointerUp);
+  root.addEventListener("pointercancel", onPointerCancel);
 }
 
 attachHandlers();
