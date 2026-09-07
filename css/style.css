@@ -214,6 +214,24 @@ body {
 .wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .wl-timer-actions .wl-btn { flex: 1 1 40%; }
+/* Session self-rating, shown on the break screen. The three buttons print the
+   points each choice lands on, so the trade-off is visible before clicking. */
+.wl-rating { width: 100%; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--wl-border); }
+.wl-rating-row { display: flex; gap: 8px; width: 100%; margin: 8px 0 6px; }
+.wl-rating-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 9px 4px; border: 1px solid var(--wl-border); border-radius: 8px;
+  background: var(--wl-surface-2); color: var(--wl-text-muted); cursor: pointer; font: inherit; }
+.wl-rating-btn:hover { border-color: var(--wl-text-muted); }
+.wl-rating-label { font-size: 13px; }
+.wl-rating-points { font-family: 'IBM Plex Mono', monospace; font-size: 11px; opacity: .8; }
+.wl-rating-btn.is-on { color: var(--wl-text); border-color: currentColor; }
+.wl-rating-btn.is-on.is-focused { color: var(--wl-work); }
+.wl-rating-btn.is-on.is-scattered { color: var(--wl-spend); }
+.wl-rating-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  font-size: 10px; vertical-align: middle; background: var(--wl-surface-2); color: var(--wl-text-muted); }
+.wl-rating-badge.is-focused { color: var(--wl-work); }
+.wl-rating-badge.is-scattered { color: var(--wl-spend); }
+
 /* A paused session drains the colour out of the card, so a forgotten pause is
    obvious at a glance rather than looking like a stalled clock. */
 .wl-timer.is-paused .wl-timer-phase,
