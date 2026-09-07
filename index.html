@@ -4,10 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>작업 장부</title>
-  <link rel="stylesheet" href="css/style.css?v=20260903q" />
+  <link rel="stylesheet" href="css/style.css?v=20260903r" />
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="js/app.js?v=20260903q"></script>
+  <!-- Source for the floating (picture-in-picture) timer. Parked off-screen
+       rather than hidden: display:none can stop a canvas stream or block
+       picture-in-picture from starting. -->
+  <div style="position:fixed;left:-10000px;top:0;width:480px;height:270px;pointer-events:none" aria-hidden="true">
+    <canvas id="wl-pip-canvas" width="480" height="270"></canvas>
+    <video id="wl-pip-video" muted playsinline></video>
+  </div>
+  <script type="module" src="js/app.js?v=20260903r"></script>
 </body>
 </html>

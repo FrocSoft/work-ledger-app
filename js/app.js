@@ -42,6 +42,7 @@ const ICONS = {
   pencil: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>',
   archive: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"></path><line x1="10" y1="13" x2="14" y2="13"></line></svg>',
   bell: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>',
+  pip: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect></svg>',
 };
 
 // ---- utils ----
@@ -224,6 +225,8 @@ let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
 let switchFormOpen = false;
+let floatingTimerOn = false;
+const BASE_TITLE = document.title;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -308,6 +311,8 @@ function onTick() {
   if (!state) return;
   updateTimerDisplay();
   updateSpendTimerDisplay();
+  updateTitleTimer();
+  drawFloatingTimer();
   maybeNotifyTimerDone();
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
@@ -318,6 +323,93 @@ function onTick() {
     const dayChanged = renderedDay !== todayKey();
     if (savingsChanged || spendChanged) persistAndRender();
     else if (dayChanged) render();
+  }
+}
+
+// What a running timer is showing right now, shared by the tab title and the
+// floating window so they never disagree.
+function runningTimerInfo() {
+  const b = state.activeBlock;
+  if (b) {
+    const isBreak = b.phase === "break";
+    return {
+      clock: formatClock(Date.now() - b.startedAt),
+      label: isBreak ? "휴식" : b.task,
+      accent: isBreak ? "#C9A227" : "#8FA876",
+      over: Date.now() - b.startedAt > (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
+    };
+  }
+  const s = state.activeSpend;
+  if (s) {
+    return {
+      clock: formatClock(Date.now() - s.startedAt),
+      label: `${s.label} · -${spendElapsedPoints(s)}점`,
+      accent: "#C0684A",
+      over: spendMinutes(s) > SPEND_INCLUDED_MIN,
+    };
+  }
+  return null;
+}
+// The closest a web page gets to a menu-bar clock: the tab title, which
+// desktop browsers show even while the window sits behind something else.
+function updateTitleTimer() {
+  const info = runningTimerInfo();
+  document.title = info ? `${info.clock} · ${info.label}` : BASE_TITLE;
+}
+
+// A floating always-on-top window, done as picture-in-picture over a canvas —
+// the one way a page can stay visible above other apps. Unsupported browsers
+// simply never see the button.
+function floatingTimerSupported() {
+  const v = document.createElement("video");
+  return !!(document.pictureInPictureEnabled || typeof v.webkitSetPresentationMode === "function");
+}
+function drawFloatingTimer() {
+  const canvas = document.getElementById("wl-pip-canvas");
+  if (!canvas || !floatingTimerOn) return;
+  const info = runningTimerInfo();
+  const ctx = canvas.getContext("2d");
+  const { width: W, height: H } = canvas;
+  ctx.fillStyle = "#1B1917";
+  ctx.fillRect(0, 0, W, H);
+  if (!info) {
+    ctx.fillStyle = "#8C8474";
+    ctx.font = "500 28px -apple-system, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("진행 중인 블록 없음", W / 2, H / 2 + 10);
+    return;
+  }
+  ctx.fillStyle = info.over ? "#C0684A" : info.accent;
+  ctx.font = "600 96px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.fillText(info.clock, W / 2, H / 2 + 14);
+  ctx.fillStyle = "#BDB4A2";
+  ctx.font = "500 30px -apple-system, system-ui, sans-serif";
+  const label = info.label.length > 18 ? `${info.label.slice(0, 17)}…` : info.label;
+  ctx.fillText(label, W / 2, H / 2 + 70);
+}
+async function toggleFloatingTimer() {
+  const canvas = document.getElementById("wl-pip-canvas");
+  const video = document.getElementById("wl-pip-video");
+  if (!canvas || !video) return;
+  try {
+    if (floatingTimerOn) {
+      floatingTimerOn = false;
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else if (video.webkitSetPresentationMode) video.webkitSetPresentationMode("inline");
+      render();
+      return;
+    }
+    floatingTimerOn = true;
+    drawFloatingTimer();
+    if (!video.srcObject) video.srcObject = canvas.captureStream(2);
+    await video.play();
+    if (video.requestPictureInPicture) await video.requestPictureInPicture();
+    else video.webkitSetPresentationMode("picture-in-picture");
+    render();
+  } catch (e) {
+    floatingTimerOn = false;
+    render();
   }
 }
 
@@ -1993,6 +2085,9 @@ function renderShell() {
             ${typeof Notification !== "undefined" ? `
               <button class="wl-icon-btn ${Notification.permission === "granted" ? "is-active" : ""}" data-action="requestNotifications" title="${Notification.permission === "granted" ? "타이머 알림 켜짐" : "타이머 알림 받기"}">${ICONS.bell}</button>
             ` : ""}
+            ${floatingTimerSupported() ? `
+              <button class="wl-icon-btn ${floatingTimerOn ? "is-active" : ""}" data-action="toggleFloatingTimer" title="${floatingTimerOn ? "떠 있는 타이머 닫기" : "타이머를 화면 위에 띄우기"}">${ICONS.pip}</button>
+            ` : ""}
             <button class="wl-icon-btn" data-action="openSettings" title="설정">${ICONS.gear}</button>
           </div>
         </div>
@@ -2142,6 +2237,7 @@ function runAction(name, ds) {
     case "cancelEditSpendPreset": cancelEditSpendPreset(); break;
     case "openSettings": openSettings(); break;
     case "requestNotifications": requestNotifications(); break;
+    case "toggleFloatingTimer": toggleFloatingTimer(); break;
     case "closeSettings": closeSettings(); break;
     case "saveSettings": submitSettings(); break;
     case "testSettings": testSettingsForm(); break;
@@ -2404,6 +2500,16 @@ function attachHandlers() {
   root.addEventListener("pointermove", onPointerMove);
   root.addEventListener("pointerup", onPointerUp);
   root.addEventListener("pointercancel", onPointerCancel);
+  // Closing the floating window from its own controls has to switch the
+  // header button back off.
+  const pipVideo = document.getElementById("wl-pip-video");
+  if (pipVideo) {
+    const off = () => { if (floatingTimerOn) { floatingTimerOn = false; render(); } };
+    pipVideo.addEventListener("leavepictureinpicture", off);
+    pipVideo.addEventListener("webkitpresentationmodechanged", () => {
+      if (pipVideo.webkitPresentationMode !== "picture-in-picture") off();
+    });
+  }
 }
 
 attachHandlers();
