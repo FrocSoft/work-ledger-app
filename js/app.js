@@ -424,19 +424,21 @@ function savePendingSessionUpdate() {
   if (commitPendingSessionUpdate()) persistAndRender();
 }
 
-// The single choke point where a session ends: commits any pending update,
-// then either starts the next queued block or goes idle.
-function startNextQueueItemOrEnd() {
-  commitPendingSessionUpdate({ auto: true });
-  if (state.queue.length > 0) {
-    const next = state.queue.shift();
-    state.activeBlock = {
-      id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
-      startedAt: Date.now(), phase: "work",
-    };
-  } else {
-    state.activeBlock = null;
-  }
+// Ending a session commits any pending note and goes idle — the next queued
+// block waits for you to press 시작 rather than starting on its own.
+// `auto` writes the fallback "블록 완료" line; a cancelled block gets no such
+// line, only whatever was actually typed.
+function endSession({ auto = true } = {}) {
+  commitPendingSessionUpdate({ auto });
+  state.activeBlock = null;
+}
+function startNextQueueItem() {
+  if (state.queue.length === 0) return;
+  const next = state.queue.shift();
+  state.activeBlock = {
+    id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
+    startedAt: Date.now(), phase: "work",
+  };
 }
 
 function completeActiveBlock() {
@@ -465,8 +467,8 @@ function completeActiveBlock() {
 }
 
 function finishEarly() { completeActiveBlock(); }
-function skipBreak() { startNextQueueItemOrEnd(); persistAndRender(); }
-function cancelBlock() { startNextQueueItemOrEnd(); persistAndRender(); }
+function skipBreak() { endSession(); persistAndRender(); }
+function cancelBlock() { endSession({ auto: false }); persistAndRender(); }
 
 function addToQueue() {
   const task = drafts.queueDraft.task.trim();
@@ -483,7 +485,7 @@ function removeFromQueue(id) {
 }
 function startQueue() {
   if (state.activeBlock || state.queue.length === 0) return;
-  startNextQueueItemOrEnd();
+  startNextQueueItem();
   persistAndRender();
 }
 function reorderArray(arr, fromIndex, toIndex) {
@@ -1173,7 +1175,7 @@ function renderQueueSection() {
       ${state.queue.length > 0 ? `
         <div class="wl-hint" style="margin-top:10px">계획된 블록 ${state.queue.length}개 · 드래그로 순서 변경</div>
         <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
-        ${!state.activeBlock ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} 시작</button>` : ""}
+        ${!state.activeBlock ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} "${escapeHtml(state.queue[0].task)}" 시작</button>` : ""}
       ` : `<div class="wl-hint" style="margin-top:10px">먼저 계획을 짜두고, 준비되면 "시작"을 눌러 순서대로 진행하세요.</div>`}
     </div>`;
 }
