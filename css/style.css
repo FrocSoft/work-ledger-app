@@ -218,10 +218,6 @@ body {
 .wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .wl-timer-actions .wl-btn { flex: 1 1 40%; }
-/* Goal pace: what the deadline demands vs what revenue is actually doing. */
-.wl-tier-pace { margin-top: 4px; line-height: 1.5; }
-.wl-tier-pace.is-behind { color: var(--wl-spend); }
-
 /* WIP limit: 진행 중 count, the per-project toggle, and the aging label that
    makes a quietly dying project visible. */
 .wl-wip-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--wl-text-muted); margin-left: 4px; }

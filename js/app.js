@@ -1457,13 +1457,12 @@ function addTier(catId) {
       t.label = draft.label.trim();
       t.targetAmount = targetAmount;
       t.actualPrice = actualPrice;
-      t.dueDate = draft.dueDate || null;
       t.image = draft.image || null;
     }
   } else {
-    c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, dueDate: draft.dueDate || null, image: draft.image || null });
+    c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
   }
-  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", dueDate: "", image: null };
+  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
   persistAndRender();
 }
 function startEditTier(catId, tierId) {
@@ -1472,12 +1471,12 @@ function startEditTier(catId, tierId) {
   if (!t) return;
   drafts.newTier[catId] = {
     label: t.label, targetAmount: String(t.targetAmount), actualPrice: String(t.actualPrice),
-    dueDate: t.dueDate || "", image: t.image || null, editingId: t.id,
+    image: t.image || null, editingId: t.id,
   };
   render();
 }
 function cancelEditTier(catId) {
-  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", dueDate: "", image: null };
+  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
   render();
 }
 function removeTier(catId, tierId) {
@@ -2234,72 +2233,6 @@ function renderTierRow(t, totalRevenue, showActions, catId) {
     </li>`;
 }
 
-// 누적 목표는 기한이 없으면 "언젠가"에 머물러서 오늘 하는 일과 연결되지 않습니다.
-// 기한을 넣으면 두 개의 속도를 나란히 보여줄 수 있습니다 — 목표를 지키려면
-// 필요한 속도와, 실제로 내고 있는 속도. 둘을 비교해야 앞서는지 뒤처지는지 압니다.
-function monthsBetween(fromKey, toKey) {
-  const [fy, fm, fd] = fromKey.split("-").map(Number);
-  const [ty, tm, td] = toKey.split("-").map(Number);
-  return (ty - fy) * 12 + (tm - fm) + (td - fd) / 30;
-}
-// 최근 수입이 실제로 어느 속도로 들어오는지. 기록이 하나뿐이면 속도를 알 수
-// 없으므로 (한 점으로는 기울기를 못 구합니다) null을 돌려줍니다.
-function revenuePerMonth() {
-  const log = state.revenueLog;
-  if (log.length < 2) return null;
-  const dates = log.map((r) => r.date).sort();
-  const span = monthsBetween(dates[0], todayKey());
-  if (span < 0.5) return null; // 기간이 너무 짧으면 외삽이 거짓말이 됩니다
-  return log.reduce((a, r) => a + r.amount, 0) / span;
-}
-function tierPace(t, totalRevenue) {
-  const remain = Math.max(0, t.targetAmount - totalRevenue);
-  const actual = revenuePerMonth();
-  const out = { remain, actual, needed: null, monthsLeft: null, eta: null, behind: false };
-  if (t.dueDate) {
-    // 화면에 적는 개월 수로 나눠야 "7개월 남음 · 월 N원 필요"가 서로 맞습니다.
-    // 소수점 개월로 나누면 사용자가 암산했을 때 숫자가 어긋나 보여요.
-    const months = Math.max(0, Math.round(monthsBetween(todayKey(), t.dueDate)));
-    out.monthsLeft = months;
-    out.needed = months > 0 ? remain / months : null;
-  }
-  if (actual > 0 && remain > 0) {
-    const monthsNeeded = remain / actual;
-    const d = new Date();
-    d.setMonth(d.getMonth() + Math.round(monthsNeeded));
-    out.eta = d;
-    if (out.monthsLeft != null) out.behind = monthsNeeded > out.monthsLeft;
-  }
-  return out;
-}
-function formatMoney(n) {
-  const won = Math.round(n);
-  if (won >= 100000000) return `${(won / 100000000).toFixed(won % 100000000 === 0 ? 0 : 1)}억원`;
-  if (won >= 10000) return `${Math.round(won / 10000).toLocaleString()}만원`;
-  return `${won.toLocaleString()}원`;
-}
-function renderTierPace(t, totalRevenue) {
-  if (!t.dueDate && state.revenueLog.length === 0) return "";
-  const p = tierPace(t, totalRevenue);
-  if (p.remain <= 0) return "";
-  const bits = [];
-  if (t.dueDate) {
-    const left = p.monthsLeft;
-    const past = monthsBetween(todayKey(), t.dueDate) <= 0;
-    bits.push(past
-      ? `${t.dueDate.replace(/-/g, ".")} 기한 지남`
-      : `${t.dueDate.replace(/-/g, ".")}까지 ${left > 0 ? `${left}개월` : "한 달 미만"} 남음`);
-    if (p.needed) bits.push(`월 ${formatMoney(p.needed)} 필요`);
-  }
-  if (p.actual) {
-    bits.push(`실제 월 ${formatMoney(p.actual)}`);
-    if (p.eta) bits.push(`이 속도면 ${p.eta.getFullYear()}년 ${p.eta.getMonth() + 1}월 도달`);
-  } else if (state.revenueLog.length < 2) {
-    bits.push("수입 기록이 쌓이면 도달 시점을 계산해요");
-  }
-  return `<div class="wl-hint wl-tier-pace ${p.behind ? "is-behind" : ""}">${bits.join(" · ")}</div>`;
-}
-
 function renderGoalTierPreview(t, totalRevenue) {
   const unlocked = totalRevenue >= t.targetAmount;
   const pct = unlocked ? 100 : Math.min(100, Math.round((totalRevenue / t.targetAmount) * 100));
@@ -2313,7 +2246,6 @@ function renderGoalTierPreview(t, totalRevenue) {
           <span class="wl-progress-label">${pct}%</span>
         </div>
         <div class="wl-hint">제품가 ${t.actualPrice.toLocaleString()}원 · 목표 ${t.targetAmount.toLocaleString()}원</div>
-        ${renderTierPace(t, totalRevenue)}
       </div>
     </div>`;
 }
@@ -2614,7 +2546,6 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
         <input class="wl-input wl-input--sm" placeholder="가격대 이름" data-draft="tierLabel" data-cat="${c.id}" value="${escapeAttr(draft.label || "")}" />
         <input class="wl-input wl-input--num" placeholder="목표 금액" inputmode="numeric" data-draft="tierTargetAmount" data-cat="${c.id}" value="${escapeAttr(draft.targetAmount || "")}" />
         <input class="wl-input wl-input--num" placeholder="실제 가격(선택)" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
-        <input class="wl-input wl-input--sm" type="date" title="언제까지 (선택)" data-draft="tierDueDate" data-cat="${c.id}" value="${escapeAttr(draft.dueDate || "")}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${draft.editingId ? ICONS.check : ICONS.plus} ${draft.editingId ? "저장" : ""}</button>
         ${draft.editingId ? `<button class="wl-btn wl-btn--ghost" data-action="cancelEditTier" data-cat="${c.id}">${ICONS.x}</button>` : ""}
@@ -2943,11 +2874,6 @@ function onRootInput(e) {
     case "tierTargetAmount": {
       const catId = el.dataset.cat;
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), targetAmount: clampNumeric() };
-      break;
-    }
-    case "tierDueDate": {
-      const catId = el.dataset.cat;
-      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), dueDate: value };
       break;
     }
     case "tierActualPrice": {
