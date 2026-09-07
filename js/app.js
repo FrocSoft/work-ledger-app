@@ -1327,9 +1327,19 @@ function renderProjectStatusRow(w) {
   const costTotal = workCostTotal(w);
   const costDraft = drafts.newCost[w.id] || {};
   const costOpen = !!costFormOpen[w.id];
+  const done = (w.subtasks || []).filter((s) => s.done).length;
+  const total = (w.subtasks || []).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const stats = workSessionStats(w.id);
   return `
-    <div class="wl-project-row">
+    <section class="wl-card wl-project-card">
       <div class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}</div>
+      ${total > 0 ? `
+        <div class="wl-progress">
+          <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
+          <span class="wl-progress-label">${done}/${total}</span>
+        </div>` : ""}
+      ${stats.minutes > 0 ? `<div class="wl-hint">블록 ${stats.count}개 · 총 ${formatMinutes(stats.minutes)}</div>` : ""}
       ${latest
         ? `<div class="wl-project-status">
             ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
@@ -1352,21 +1362,19 @@ function renderProjectStatusRow(w) {
           <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.check}</button>
           <button class="wl-btn wl-btn--ghost" data-action="toggleCostForm" data-work="${w.id}">${ICONS.x}</button>
         </div>` : `<button class="wl-cost-toggle" data-action="toggleCostForm" data-work="${w.id}">${ICONS.plus} 비용 추가</button>`}
-    </div>`;
+    </section>`;
 }
 
 function renderProjectsStatusColumn() {
   // Follows the order set by dragging in 할일 관리, not recency.
   const sorted = state.works.filter((w) => !w.archived);
   return `
-    <section class="wl-card">
-      <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">프로젝트 최신 상황</div>
-        <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
-      </div>
-      ${sorted.length === 0 ? `<div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div>` : ""}
-      ${sorted.map(renderProjectStatusRow).join("")}
-    </section>`;
+    <div class="wl-work-head wl-col-head">
+      <div class="wl-card-title" style="margin-bottom:0">프로젝트 최신 상황</div>
+      <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
+    </div>
+    ${sorted.length === 0 ? `<section class="wl-card"><div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div></section>` : ""}
+    ${sorted.map(renderProjectStatusRow).join("")}`;
 }
 
 // ---- render: column 3 — today summary ----
