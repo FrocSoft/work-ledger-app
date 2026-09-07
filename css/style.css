@@ -372,9 +372,10 @@ body {
 .wl-grip { color: var(--wl-text-muted); cursor: grab; flex-shrink: 0; }
 
 /* project status column */
-.wl-project-row { padding: 12px 0; border-bottom: 1px solid var(--wl-border); }
-.wl-project-row:last-of-type { border-bottom: none; padding-bottom: 0; }
-.wl-project-row .wl-work-name { margin-bottom: 6px; }
+.wl-project-card .wl-work-name { margin-bottom: 6px; }
+.wl-project-card .wl-progress { margin: 0 0 8px; }
+.wl-project-card .wl-hint { margin: -4px 0 8px; }
+.wl-col-head { padding: 0 2px 2px; }
 .wl-project-status { display: flex; gap: 8px; margin-bottom: 8px; }
 .wl-project-status-text { font-size: 12.5px; color: var(--wl-text); overflow-wrap: break-word; align-self: center; }
 .wl-project-money { display: flex; gap: 12px; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 6px; }
