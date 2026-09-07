@@ -114,6 +114,27 @@ function computeBlockPoints(basePoints, minutes) {
   const overtimeBonus = Math.floor((minutes - WORK_MIN) / 25);
   return Math.round(basePoints) + overtimeBonus;
 }
+// 세션이 끝나면 휴식 화면에서 스스로 매기는 평가. 기본값은 "보통"(0)이라
+// 아무것도 고르지 않으면 점수가 그대로입니다.
+const SESSION_RATINGS = [
+  { id: "focused", label: "몰입", adjust: 1, hint: "거의 안 끊기고 집중했어요" },
+  { id: "normal", label: "보통", adjust: 0, hint: "평소만큼 했어요" },
+  { id: "scattered", label: "산만", adjust: -1, hint: "자주 끊기거나 딴짓했어요" },
+];
+function ratingAdjust(rating) {
+  const r = SESSION_RATINGS.find((x) => x.id === rating);
+  return r ? r.adjust : 0;
+}
+// 평가는 이미 딴 점수를 ±1 움직일 뿐, 없던 점수를 만들지는 않습니다.
+// 25분 이하로 끝나 0점인 블록은 몰입이어도 0점 그대로입니다.
+function pointsWithRating(basePoints, minutes, rating) {
+  const base = computeBlockPoints(basePoints, minutes);
+  if (base <= 0) return 0;
+  return Math.max(0, base + ratingAdjust(rating));
+}
+function blockBasePoints(b) {
+  return computeBlockPoints(segmentsBasePoints(blockSegments(b)), blockMinutes(b));
+}
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -751,6 +772,36 @@ function toggleSwitchForm() {
   render();
 }
 
+// 저축에서 당겨쓴 빚은 그날 번 점수로 갚습니다. 평가로 점수가 바뀌면 이미 갚은
+// 만큼을 되돌린 뒤 새 점수로 다시 갚아야 이중 상환이 나지 않습니다.
+function repayBorrowed(day, block) {
+  const prev = block.repaid || 0;
+  if (prev > 0) {
+    state.savings -= prev;
+    state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) + prev;
+  }
+  const owed = state.borrowedByDate[day] || 0;
+  const repaid = block.points > 0 ? Math.min(owed, block.points) : 0;
+  if (repaid > 0) {
+    state.savings += repaid;
+    state.borrowedByDate[day] = owed - repaid;
+  }
+  block.repaid = repaid;
+}
+// 휴식 중에만 매길 수 있습니다. 같은 버튼을 다시 누르면 해제되고,
+// 휴식을 끝내면 그대로 굳습니다.
+function rateSession(rating) {
+  const active = state.activeBlock;
+  if (!active || active.phase !== "break") return;
+  const day = todayKey();
+  const block = (state.blocksByDate[day] || []).find((b) => b.id === active.id);
+  if (!block) return;
+  block.rating = block.rating === rating ? null : rating;
+  block.points = pointsWithRating(segmentsBasePoints(blockSegments(block)), blockMinutes(block), block.rating);
+  repayBorrowed(day, block);
+  persistAndRender();
+}
+
 function completeActiveBlock() {
   if (!state.activeBlock) return;
   const day = todayKey();
@@ -763,15 +814,11 @@ function completeActiveBlock() {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
     startedAt: state.activeBlock.startedAt, completedAt, points, minutes,
+    rating: null, repaid: 0,
     ...(segments.length > 1 ? { segments } : {}),
   };
   state.blocksByDate[day] = [...blocks, newBlock];
-  const owed = state.borrowedByDate[day] || 0;
-  if (owed > 0 && points > 0) {
-    const repaid = Math.min(owed, points);
-    state.savings += repaid;
-    state.borrowedByDate[day] = owed - repaid;
-  }
+  repayBorrowed(day, newBlock);
   state.activeBlock = {
     ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt,
     pausedMs: 0, segPausedMs: 0, pausedAt: null,
@@ -1063,11 +1110,15 @@ function blockStartedAt(b) {
   return b.startedAt != null ? b.startedAt : b.completedAt - blockMinutes(b) * 60000;
 }
 function findBlockById(blockId) {
+  return findBlockEntry(blockId).block;
+}
+// The day matters as well as the block: repaying borrowed points is per-day.
+function findBlockEntry(blockId) {
   for (const date of Object.keys(state.blocksByDate)) {
-    const b = (state.blocksByDate[date] || []).find((x) => x.id === blockId);
-    if (b) return b;
+    const block = (state.blocksByDate[date] || []).find((x) => x.id === blockId);
+    if (block) return { block, day: date };
   }
-  return null;
+  return { block: null, day: null };
 }
 function formatMinutes(mins) {
   if (mins < 60) return `${mins}분`;
@@ -1114,7 +1165,7 @@ function startEditBlockMinutes(blockId) {
 }
 function cancelEditBlockMinutes() { editingBlockId = null; render(); }
 function saveEditBlockMinutes() {
-  const b = findBlockById(editingBlockId);
+  const { block: b, day } = findBlockEntry(editingBlockId);
   if (!b) return;
   const mins = Number(editingBlockMinutesDraft);
   if (!Number.isFinite(mins) || mins < 0) return;
@@ -1132,6 +1183,10 @@ function saveEditBlockMinutes() {
   // The end time is when 완료 was actually pressed, so a corrected duration
   // moves the start instead — otherwise the logged range would contradict it.
   b.startedAt = b.completedAt - mins * 60000;
+  // A corrected duration changes what the block is worth — 35분을 20분으로 고치면
+  // 25분 규칙에 걸려 0점이 되어야 합니다. 예전에는 점수가 그대로 남아 있었어요.
+  b.points = pointsWithRating(segmentsBasePoints(blockSegments(b)), mins, b.rating);
+  repayBorrowed(day, b);
   editingBlockId = null;
   persistAndRender();
 }
@@ -1451,6 +1506,7 @@ function renderTimerBlock({ label, phaseLabel, durationMin, elapsed, isBreak, pa
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
       ${!isBreak && switchFormOpen ? renderSwitchForm() : ""}
+      ${isBreak ? renderSessionRating() : ""}
       ${isBreak && workId ? renderSessionUpdateComposer(workId, subtaskId) : ""}
     </div>`;
 }
@@ -1510,6 +1566,34 @@ function renderSwitchForm() {
         <input class="wl-input wl-input--sm" placeholder="이제 할 일 (비우면 유지)" data-draft="switchTask" data-enter-action="switchSessionWork" value="${escapeAttr(d.task)}" />
         <button class="wl-btn wl-btn--primary" data-action="switchSessionWork">전환</button>
       </div>
+    </div>`;
+}
+
+// 방금 끝낸 세션을 스스로 평가하는 자리. 고르지 않으면 "보통"과 같아서
+// 점수가 그대로이므로, 굳이 누르지 않아도 흐름이 막히지 않습니다.
+function renderSessionRating() {
+  const day = todayKey();
+  const block = (state.blocksByDate[day] || []).find((b) => b.id === state.activeBlock.id);
+  if (!block) return "";
+  const base = blockBasePoints(block);
+  const chosen = SESSION_RATINGS.find((r) => r.id === block.rating);
+  return `
+    <div class="wl-rating">
+      <div class="wl-hint">이번 세션 어땠나요? — 점수가 ±1점 움직입니다</div>
+      <div class="wl-rating-row">
+        ${SESSION_RATINGS.map((r) => {
+          const points = base <= 0 ? 0 : Math.max(0, base + r.adjust);
+          return `
+          <button class="wl-rating-btn ${block.rating === r.id ? "is-on" : ""} is-${r.id}"
+                  data-action="rateSession" data-rating="${r.id}" title="${escapeAttr(r.hint)}">
+            <span class="wl-rating-label">${r.label}</span>
+            <span class="wl-rating-points">${points}점</span>
+          </button>`;
+        }).join("")}
+      </div>
+      <div class="wl-hint">${base <= 0
+        ? "25분 이하로 끝난 블록이라 점수가 없어요. 평가는 기록으로만 남습니다."
+        : (chosen ? `${escapeHtml(chosen.hint)} · 현재 ${block.points}점` : `고르지 않으면 "보통"과 같아요 · 현재 ${block.points}점`)}</div>
     </div>`;
 }
 
@@ -1800,6 +1884,12 @@ function blockNotes(blockId) {
   }));
   return out;
 }
+// 보통(또는 평가 안 함)은 배지를 달지 않습니다 — 눈에 띄어야 하는 건 양 끝뿐이에요.
+function ratingBadge(b) {
+  const r = SESSION_RATINGS.find((x) => x.id === b.rating);
+  if (!r || r.adjust === 0) return "";
+  return ` <span class="wl-rating-badge is-${r.id}">${r.label}</span>`;
+}
 function renderBlockLogRow(b) {
   // A stretch that rounded to zero minutes (switching 할일 right after a
   // switch, or a block ended immediately) is noise in the log.
@@ -1814,7 +1904,7 @@ function renderBlockLogRow(b) {
         <div class="wl-log-works">
           ${segs.map((s) => `<span class="wl-log-work">${escapeHtml(workName(s.workId))}<b>${s.minutes}분</b></span>`).join("")}
         </div>
-        ${tasks.length ? `<div class="wl-log-label">${escapeHtml(tasks.join(" · "))}</div>` : ""}
+        ${tasks.length ? `<div class="wl-log-label">${escapeHtml(tasks.join(" · "))}${ratingBadge(b)}</div>` : ""}
         ${notes.map((n) => `<div class="wl-log-note">${escapeHtml(n)}</div>`).join("")}
       </div>
       <span class="wl-log-points">+${blockPoints(b)}</span>
@@ -2364,6 +2454,7 @@ function runAction(name, ds) {
   switch (name) {
     case "finishEarly": finishEarly(); break;
     case "togglePauseSession": togglePauseSession(); break;
+    case "rateSession": rateSession(ds.rating); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
     case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
