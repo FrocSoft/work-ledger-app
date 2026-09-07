@@ -7,7 +7,8 @@ import {
 const WORK_MIN = 50;
 const BREAK_MIN = 10;
 const OFFDAY_COST = 15;
-const SPEND_MIN_PER_POINT = 10; // overage beyond the start-up charge drains at this fixed rate: 1 point per 10 minutes
+const SPEND_INCLUDED_MIN = 60; // a preset's points buy this much time up front
+const SPEND_MIN_PER_POINT = 10; // past the included time: 1 more point per 10 minutes
 const SIZE_WARN_BYTES = 900 * 1024; // Contents API caps file writes around 1MB
 
 const DEFAULT_SPEND_PRESETS = [
@@ -491,16 +492,27 @@ function reorderArray(arr, fromIndex, toIndex) {
 }
 
 // ---- actions: spend timer (presets run continuously until stopped) ----
-// Starting charges the preset's configured points right away; running
-// longer keeps adding overage on top at a fixed 1 point per 10 minutes,
-// regardless of the preset's own cost.
+// A preset's points are charged the moment it starts and cover the first
+// hour. Only time past that hour costs more, at 1 point per 10 minutes.
+function spendMinutes(activeSpend, now) {
+  return ((now != null ? now : Date.now()) - activeSpend.startedAt) / 60000;
+}
 function spendElapsedPoints(activeSpend, now) {
-  const minutes = ((now != null ? now : Date.now()) - activeSpend.startedAt) / 60000;
-  return activeSpend.cost + Math.floor(minutes / SPEND_MIN_PER_POINT);
+  const over = Math.max(0, spendMinutes(activeSpend, now) - SPEND_INCLUDED_MIN);
+  return activeSpend.cost + Math.floor(over / SPEND_MIN_PER_POINT);
+}
+function spendStatusText(activeSpend) {
+  const minutes = spendMinutes(activeSpend);
+  const cost = spendElapsedPoints(activeSpend);
+  if (minutes < SPEND_INCLUDED_MIN) {
+    const left = Math.max(1, Math.ceil(SPEND_INCLUDED_MIN - minutes));
+    return `지금까지 -${cost}점 · 포함된 1시간 중 ${left}분 남음`;
+  }
+  return `지금까지 -${cost}점 · 1시간 초과 ${formatMinutes(Math.floor(minutes - SPEND_INCLUDED_MIN))} · 10분마다 1점씩 더 차감돼요`;
 }
 function startSpendTimer(label, cost) {
   if (state.activeSpend) return;
-  if (!window.confirm(`"${label}" 소비를 시작할까요? (시작하면 바로 -${cost}점, 이후 10분마다 1점씩 추가로 차감돼요)`)) return;
+  if (!window.confirm(`"${label}" 소비를 시작할까요? (바로 -${cost}점으로 1시간, 1시간이 지나면 10분마다 1점씩 추가 차감)`)) return;
   state.activeSpend = { label, cost, startedAt: Date.now(), appliedPoints: 0, logId: null };
   applyActiveSpendTick();
   persistAndRender();
@@ -1121,7 +1133,7 @@ function updateSpendTimerDisplay() {
   if (!clockEl || !costEl) return;
   const elapsedMs = Date.now() - state.activeSpend.startedAt;
   clockEl.textContent = formatClock(elapsedMs);
-  costEl.textContent = `지금까지 -${spendElapsedPoints(state.activeSpend)}점 소비 중 · 끄기 전까지 계속 소비돼요`;
+  costEl.textContent = spendStatusText(state.activeSpend);
 }
 
 function renderQueueItem(item, idx) {
@@ -1237,7 +1249,7 @@ function renderSpendPresetButtons() {
       ${state.spendPresets.map((p) => `
         <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}">
           <span>${escapeHtml(p.label)}</span>
-          <span class="wl-spend-cost">시작 -${p.cost}점 · 이후 10분당 1점</span>
+          <span class="wl-spend-cost">${p.cost}점 = 1시간 · 이후 10분당 1점</span>
         </button>`).join("")}
     </div>
     <div class="wl-field-row wl-field-row--tight">
@@ -1250,14 +1262,13 @@ function renderSpendPresetButtons() {
 function renderActiveSpendTimer() {
   const active = state.activeSpend;
   const elapsedMs = Date.now() - active.startedAt;
-  const cost = spendElapsedPoints(active);
   return `
     <div class="wl-timer">
       <div class="wl-timer-top">
         <span class="wl-timer-phase is-spend">${ICONS.square} ${escapeHtml(active.label)}</span>
         <span class="wl-timer-clock" id="wl-spend-clock">${formatClock(elapsedMs)}</span>
       </div>
-      <div class="wl-hint" id="wl-spend-cost-live">지금까지 -${cost}점 소비 중 · 끄기 전까지 계속 소비돼요</div>
+      <div class="wl-hint" id="wl-spend-cost-live">${spendStatusText(active)}</div>
       <div class="wl-timer-actions">
         <button class="wl-btn wl-btn--primary wl-btn--full" data-action="stopSpendTimer">${ICONS.check} 끄기</button>
       </div>
@@ -1282,7 +1293,7 @@ function renderSpendPresetsEditor() {
             <button class="wl-icon-btn" data-action="removeSpendPreset" data-preset="${p.id}">${ICONS.x}</button>
           </li>`).join("")}
       </ul>`}
-    <div class="wl-hint">시작하면 설정한 점수만큼 바로 차감, 이후 10분마다 1점씩 추가로 차감돼요</div>
+    <div class="wl-hint">설정한 점수가 시작하자마자 차감되고 1시간을 쓸 수 있어요. 1시간이 지나면 10분마다 1점씩 추가로 차감돼요.</div>
     <div class="wl-field-row wl-field-row--tight">
       <input class="wl-input wl-input--sm" placeholder="이름" data-draft="newPresetLabel" value="${escapeAttr(drafts.newPresetLabel)}" />
       <input class="wl-input wl-input--num" placeholder="점수" inputmode="numeric" data-draft="newPresetCost" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetCost)}" />
