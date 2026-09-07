@@ -218,7 +218,7 @@ const drafts = {
   newTagPoints: "",
   newPresetLabel: "",
   newPresetCost: "",
-  pendingUpdate: { text: "", image: null, subtaskDone: false },
+  pendingUpdate: { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "" },
   newRevenueAmount: "",
   newCategoryName: "",
   newTier: {},
@@ -384,29 +384,49 @@ function computeToday() {
 // Commits whatever the user typed into the break-time composer (or an
 // auto-generated line if they typed nothing) as the linked work's update —
 // this is now the only way work updates get created.
-function commitPendingSessionUpdate() {
+// Writes whatever is in the composer to the linked work. Called both by the
+// "기록" button mid-session and once more when the session ends, so a note can
+// be written the moment it happens instead of waiting for the break.
+function commitPendingSessionUpdate({ auto = false } = {}) {
   const active = state.activeBlock;
-  if (!active || active.phase !== "break" || !active.workId) return;
+  if (!active || !active.workId) return false;
   const w = state.works.find((x) => x.id === active.workId);
-  if (!w) return;
+  if (!w) return false;
+  const draft = drafts.pendingUpdate;
+  const typed = draft.text.trim();
+  const costAmount = Number(draft.costAmount);
+  const hasCost = !!costAmount && costAmount > 0;
+  // The end-of-session call only writes a fallback line when nothing was
+  // recorded for this block at all, so a note saved mid-session isn't doubled.
+  if (!typed && !draft.image && !hasCost && !draft.subtaskDone) {
+    if (!auto || active.noted) return false;
+  }
   const subtask = active.subtaskId ? w.subtasks.find((s) => s.id === active.subtaskId) : null;
   const block = findBlockById(active.id);
-  const minutes = block ? blockMinutes(block) : WORK_MIN;
-  const typed = drafts.pendingUpdate.text.trim();
+  const minutes = block ? blockMinutes(block) : Math.max(0, Math.round((Date.now() - active.startedAt) / 60000));
   const text = typed || `${subtask ? `[${subtask.name}] ` : ""}"${active.task}" 블록 완료 (${minutes}분)`;
   w.updates = w.updates || [];
   w.updates.unshift({
-    id: uid(), text, image: drafts.pendingUpdate.image || null, at: active.completedAt || Date.now(),
+    id: uid(), text, image: draft.image || null, at: active.completedAt || Date.now(),
     auto: !typed, blockId: active.id,
   });
-  if (subtask && drafts.pendingUpdate.subtaskDone) subtask.done = true;
-  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
+  if (hasCost) {
+    w.costs = w.costs || [];
+    w.costs.push({ id: uid(), amount: costAmount, label: draft.costLabel.trim(), at: Date.now() });
+  }
+  if (subtask && draft.subtaskDone) subtask.done = true;
+  state.activeBlock = { ...active, noted: true };
+  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "" };
+  return true;
+}
+function savePendingSessionUpdate() {
+  if (commitPendingSessionUpdate()) persistAndRender();
 }
 
 // The single choke point where a session ends: commits any pending update,
 // then either starts the next queued block or goes idle.
 function startNextQueueItemOrEnd() {
-  commitPendingSessionUpdate();
+  commitPendingSessionUpdate({ auto: true });
   if (state.queue.length > 0) {
     const next = state.queue.shift();
     state.activeBlock = {
@@ -437,7 +457,8 @@ function completeActiveBlock() {
     state.savings += repaid;
     state.borrowedByDate[day] = owed - repaid;
   }
-  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
+  // Anything typed during the work phase carries into the break rather than
+  // being wiped, so a half-written note survives pressing 완료.
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
 }
@@ -988,7 +1009,7 @@ function doReset(scope) {
   editingPresetId = null;
   notifiedKey = null;
   drafts.queueDraft = { task: "", workId: "", subtaskId: "" };
-  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false };
+  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "" };
   settingsOpen = false;
   persistAndRender();
 }
@@ -1049,20 +1070,25 @@ function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, 
           <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
-      ${isBreak && workId ? renderSessionUpdateComposer(workId, subtaskId) : ""}
+      ${workId ? renderSessionUpdateComposer(workId, subtaskId, isBreak) : ""}
     </div>`;
 }
 
-function renderSessionUpdateComposer(workId, subtaskId) {
+function renderSessionUpdateComposer(workId, subtaskId, isBreak) {
   const draft = drafts.pendingUpdate;
   const w = state.works.find((x) => x.id === workId);
   const subtask = subtaskId && w ? w.subtasks.find((s) => s.id === subtaskId) : null;
   return `
     <div class="wl-session-update">
-      <div class="wl-hint">방금 세션 기록 — 쉬는 동안 적으면 저장돼요</div>
+      <div class="wl-hint">세션 기록 — 지금 바로 적어도 되고, ${isBreak ? "휴식을 끝내면" : "세션이 끝나면"} 자동 저장돼요</div>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
-        <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="pendingUpdateText" value="${escapeAttr(draft.text)}" />
+        <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="pendingUpdateText" data-enter-action="savePendingUpdate" value="${escapeAttr(draft.text)}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickPendingUpdateImage", clearAction: "clearPendingUpdateImage" })}
+      </div>
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="쓴 비용 (선택)" data-draft="pendingUpdateCostLabel" value="${escapeAttr(draft.costLabel)}" />
+        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="pendingUpdateCostAmount" data-enter-action="savePendingUpdate" value="${escapeAttr(draft.costAmount)}" />
+        <button class="wl-btn wl-btn--ghost" data-action="savePendingUpdate">${ICONS.check} 기록</button>
       </div>
       ${subtask && !subtask.done ? `
         <div class="wl-subtask-row" style="margin-top:10px">
@@ -1191,11 +1217,8 @@ function renderProjectStatusRow(w) {
 }
 
 function renderProjectsStatusColumn() {
-  const sorted = state.works.filter((w) => !w.archived).sort((a, b) => {
-    const aAt = (a.updates && a.updates[0] && a.updates[0].at) || 0;
-    const bAt = (b.updates && b.updates[0] && b.updates[0].at) || 0;
-    return bAt - aAt;
-  });
+  // Follows the order set by dragging in 할일 관리, not recency.
+  const sorted = state.works.filter((w) => !w.archived);
   return `
     <section class="wl-card">
       <div class="wl-work-head">
@@ -1836,6 +1859,7 @@ function runAction(name, ds) {
     case "toggleCostForm": toggleCostForm(ds.work); break;
     case "clearPendingUpdateImage": drafts.pendingUpdate.image = null; render(); break;
     case "togglePendingSubtaskDone": drafts.pendingUpdate.subtaskDone = !drafts.pendingUpdate.subtaskDone; render(); break;
+    case "savePendingUpdate": savePendingSessionUpdate(); break;
     case "addRevenue": addRevenue(); break;
     case "removeRevenue": removeRevenue(ds.id); break;
     case "addCategory": addCategory(); break;
@@ -1911,6 +1935,8 @@ function onRootInput(e) {
     case "editPresetCost": editingPresetDraft.cost = clampNumeric(); break;
     case "editBlockMinutes": editingBlockMinutesDraft = clampNumeric(); break;
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
+    case "pendingUpdateCostLabel": drafts.pendingUpdate.costLabel = value; break;
+    case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
     case "editCategoryName": editingCategoryDraft = value; break;
