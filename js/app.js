@@ -549,8 +549,6 @@ function completeActiveBlock() {
     state.savings += repaid;
     state.borrowedByDate[day] = owed - repaid;
   }
-  // Anything typed during the work phase carries into the break rather than
-  // being wiped, so a half-written note survives pressing 완료.
   state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
   persistAndRender();
 }
@@ -1219,7 +1217,7 @@ function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, 
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
       ${!isBreak && switchFormOpen ? renderSwitchForm() : ""}
-      ${workId ? renderSessionUpdateComposer(workId, subtaskId, isBreak) : ""}
+      ${isBreak && workId ? renderSessionUpdateComposer(workId, subtaskId) : ""}
     </div>`;
 }
 
@@ -1281,13 +1279,13 @@ function renderSwitchForm() {
     </div>`;
 }
 
-function renderSessionUpdateComposer(workId, subtaskId, isBreak) {
+function renderSessionUpdateComposer(workId, subtaskId) {
   const draft = drafts.pendingUpdate;
   const w = state.works.find((x) => x.id === workId);
   const subtask = subtaskId && w ? w.subtasks.find((s) => s.id === subtaskId) : null;
   return `
     <div class="wl-session-update">
-      <div class="wl-hint">세션 기록 — 지금 바로 적어도 되고, ${isBreak ? "휴식을 끝내면" : "세션이 끝나면"} 자동 저장돼요</div>
+      <div class="wl-hint">방금 세션 기록 — "기록"을 누르면 바로 저장되고, 안 눌러도 휴식을 끝낼 때 저장돼요</div>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="pendingUpdateText" data-enter-action="savePendingUpdate" value="${escapeAttr(draft.text)}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickPendingUpdateImage", clearAction: "clearPendingUpdateImage" })}
