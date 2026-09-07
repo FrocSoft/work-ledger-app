@@ -2267,9 +2267,7 @@ function renderTierRow(t, totalRevenue, showActions, catId) {
 // 않고 숫자만 보여줍니다 — 무엇이 사치인지는 사람이 정할 일입니다.
 function renderLuxuryRatio(t) {
   const yearly = revenueLast12Months();
-  if (yearly <= 0) {
-    return `<div class="wl-hint">최근 12개월 실수령이 기록되면 연 수입 대비 비율을 계산해요</div>`;
-  }
+  if (yearly <= 0) return "";
   const pct = (t.actualPrice / yearly) * 100;
   // 판정하지 않고 목표 기준과 나란히 놓기만 합니다.
   return `<div class="wl-hint">최근 12개월 실수령 ${formatMoney(yearly)}의 <b>${pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10}%</b> · 목표 기준 ${state.goalRate}%</div>`;
@@ -2475,6 +2473,7 @@ function markCompleted(workId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
   w.completed = Date.now();
+  w.wip = false; // 완성했으면 더는 진행 중이 아닙니다
   persistAndRender();
 }
 function unmarkCompleted(workId) {
@@ -2619,8 +2618,11 @@ function renderWorkManageCard(w) {
             </button>
           </div>
           <div>
-            <button class="wl-wip-toggle ${w.wip ? "is-on" : ""}" data-action="toggleWorkWip" data-work="${w.id}"
-                    title="${w.wip ? "대기로 내리기" : "진행 중으로 올리기"}">${w.wip ? "진행 중" : "대기"}</button>
+            ${w.completed
+              // 작품 관리 탭에서는 되돌리기가 주된 동작이라 접힌 영역에 묻지 않습니다.
+              ? `<button class="wl-wip-toggle" data-action="unmarkCompleted" data-work="${w.id}" title="할일 관리로 되돌리기">되돌리기</button>`
+              : `<button class="wl-wip-toggle ${w.wip ? "is-on" : ""}" data-action="toggleWorkWip" data-work="${w.id}"
+                    title="${w.wip ? "대기로 내리기" : "진행 중으로 올리기"}">${w.wip ? "진행 중" : "대기"}</button>`}
             <button class="wl-icon-btn" data-action="editWork" data-work="${w.id}">${ICONS.pencil}</button>
             <button class="wl-icon-btn" data-action="archiveWork" data-work="${w.id}" title="보관">${ICONS.archive}</button>
             <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
@@ -2700,7 +2702,7 @@ function renderArchivedWorksSection(archived) {
 }
 
 function renderWorksManage() {
-  const active = state.works.filter((w) => !w.archived);
+  const active = state.works.filter((w) => !w.archived && !w.completed);
   const archived = state.works.filter((w) => w.archived);
   return `
     <div class="wl-body">
@@ -2724,7 +2726,31 @@ function renderWorksManage() {
         </div>`}
       ${active.map(renderWorkManageCard).join("")}
       ${archived.length > 0 ? renderArchivedWorksSection(archived) : ""}
-      ${renderTagManageSection()}
+    </div>`;
+}
+
+// 완성한 작품은 할일이 아니라 재고에 가깝습니다. 팔리기 전까지는 손에 남아
+// 있는 실물 자산이라, 몇 점이 얼마어치인지 한 줄로 보여줍니다.
+function completedWorks() {
+  return state.works.filter((w) => !w.archived && w.completed);
+}
+function renderWorksDone() {
+  const done = completedWorks().sort((a, b) => (b.completed || 0) - (a.completed || 0));
+  const unsold = done.filter((w) => !w.sale && w.expectedSalePrice != null);
+  const sold = done.filter((w) => w.sale);
+  const listPrice = unsold.reduce((a, w) => a + w.expectedSalePrice, 0);
+  const soldTotal = sold.reduce((a, w) => a + w.sale.amount, 0);
+  return `
+    <div class="wl-body">
+      <section class="wl-card">
+        <div class="wl-card-title">실물 자산</div>
+        <div class="wl-save-total is-sales">${netOf(listPrice).toLocaleString()}원</div>
+        <div class="wl-hint">완성했지만 아직 안 팔린 ${unsold.length}점 · 판매가 합계 ${listPrice.toLocaleString()}원의 실수령 기준</div>
+        ${sold.length > 0 ? `<div class="wl-hint" style="margin-top:6px">판매 완료 ${sold.length}점 · 실수령 ${soldTotal.toLocaleString()}원 (누적 수익에 반영됨)</div>` : ""}
+      </section>
+      ${done.length === 0
+        ? `<div class="wl-empty wl-empty--pad">아직 완성한 작품이 없어요. 할일 관리에서 "완성"을 누르면 여기로 옵니다.</div>`
+        : done.map(renderWorkManageCard).join("")}
     </div>`;
 }
 
@@ -2749,15 +2775,15 @@ function renderTagRow(t) {
 
 function renderTagManageSection() {
   return `
-    <section class="wl-card">
-      <div class="wl-card-title">태그 관리 · 블록 완료 점수</div>
+    <div class="wl-settings-block">
+      <div class="wl-card-title">태그 · 블록 완료 점수</div>
       ${state.tags.length === 0 ? `<div class="wl-empty">등록된 태그가 없어요.</div>` : `<ul class="wl-tag-list">${state.tags.map(renderTagRow).join("")}</ul>`}
       <div class="wl-field-row wl-field-row--tight">
         <input class="wl-input wl-input--sm" placeholder="태그 이름" data-draft="newTagName" value="${escapeAttr(drafts.newTagName)}" />
         <input class="wl-input wl-input--num" placeholder="점수" inputmode="numeric" data-draft="newTagPoints" data-enter-action="addTag" value="${escapeAttr(drafts.newTagPoints)}" />
         <button class="wl-btn wl-btn--ghost" data-action="addTag">${ICONS.plus}</button>
       </div>
-    </section>`;
+    </div>`;
 }
 
 // ---- render: goals-manage tab ----
@@ -2803,30 +2829,6 @@ function renderGoalsManage() {
   return `
     <div class="wl-body">
       <section class="wl-card">
-        <div class="wl-card-title">실수령률</div>
-        <div class="wl-field-row wl-field-row--tight">
-          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="payoutRate" data-enter-action="savePayoutRate" value="${escapeAttr(drafts.payoutRate != null ? drafts.payoutRate : String(state.payoutRate))}" />
-          <span class="wl-hint" style="flex:1">% — 판매가에서 실제로 손에 들어오는 비율 (전속 5:5면 50)</span>
-          <button class="wl-btn wl-btn--ghost" data-action="savePayoutRate">${ICONS.check}</button>
-        </div>
-        <div class="wl-hint">판매예상 100만원이면 실수령 ${netOf(1000000).toLocaleString()}원으로 계산합니다. 세금·수수료까지 위에서 떼이는 걸 모두 포함한 비율로 잡으세요.</div>
-      </section>
-      <section class="wl-card">
-        <div class="wl-card-title">목표 비율</div>
-        <div class="wl-field-row wl-field-row--tight">
-          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="goalRate" data-enter-action="saveGoalRate" value="${escapeAttr(drafts.goalRate != null ? drafts.goalRate : String(state.goalRate))}" />
-          <span class="wl-hint" style="flex:1">% — 물건값이 수입의 이 비율이 되면 살 만하다고 봅니다</span>
-          <button class="wl-btn wl-btn--ghost" data-action="saveGoalRate">${ICONS.check}</button>
-        </div>
-        <div class="wl-field-row wl-field-row--tight" style="margin-top:10px">
-          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="avgWorkPrice" data-enter-action="saveAvgWorkPrice" value="${escapeAttr(drafts.avgWorkPrice != null ? drafts.avgWorkPrice : String(state.avgWorkPrice))}" />
-          <span class="wl-hint" style="flex:1">원 — 평소 만드는 작품 한 점의 판매가</span>
-          <button class="wl-btn wl-btn--ghost" data-action="saveAvgWorkPrice">${ICONS.check}</button>
-        </div>
-        <div class="wl-hint">작품 한 점의 실수령은 ${formatMoney(netOf(state.avgWorkPrice))}이라, 목표가 몇 점어치인지로 환산합니다.</div>
-        <div class="wl-hint" style="margin-top:8px">낮출수록 보수적이에요. ${state.goalRate}%면 ${formatMoney(1000000)}짜리를 사려면 누적 ${formatMoney(goalTargetFor(1000000))}을 벌어야 합니다.</div>
-      </section>
-      <section class="wl-card">
         <div class="wl-field-row">
           <input class="wl-input" placeholder="새 카테고리 (예: 시계)" data-draft="newCategoryName" data-enter-action="addCategory" value="${escapeAttr(drafts.newCategoryName)}" />
           <button class="wl-btn wl-btn--primary" data-action="addCategory">${ICONS.plus} 추가</button>
@@ -2859,12 +2861,16 @@ function renderShell() {
         <nav class="wl-tabs">
           <button class="wl-tab ${currentTab === "dashboard" ? "is-active" : ""}" data-action="switchTab" data-tab="dashboard">홈</button>
           <button class="wl-tab ${currentTab === "works-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="works-manage">할일 관리</button>
+          <button class="wl-tab ${currentTab === "works-done" ? "is-active" : ""}" data-action="switchTab" data-tab="works-done">작품 관리</button>
           <button class="wl-tab ${currentTab === "goals-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="goals-manage">목표 관리</button>
         </nav>
       </header>
       <div id="wl-save-status" class="wl-savebar"></div>
       ${floatingTimerNote ? `<div class="wl-savebar wl-savebar--error">${escapeHtml(floatingTimerNote)}</div>` : ""}
-      ${currentTab === "dashboard" ? renderDashboard() : currentTab === "works-manage" ? renderWorksManage() : renderGoalsManage()}
+      ${currentTab === "dashboard" ? renderDashboard()
+        : currentTab === "works-manage" ? renderWorksManage()
+        : currentTab === "works-done" ? renderWorksDone()
+        : renderGoalsManage()}
     </div>`;
 }
 
@@ -2879,6 +2885,31 @@ function renderLoadError() {
         <button class="wl-btn wl-btn--primary" data-action="retryLoad">다시 시도</button>
         <button class="wl-btn wl-btn--ghost" data-action="openSettings">설정 열기</button>
       </div>
+    </div>`;
+}
+
+// 매일 건드릴 값이 아니라 한 번 정해두는 규칙이라, 화면에 늘어놓지 않고
+// 설정 안에 둡니다.
+function renderRulesSection() {
+  return `
+    <div class="wl-settings-block">
+      <div class="wl-card-title">규칙</div>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--num" inputmode="numeric" data-draft="payoutRate" data-enter-action="savePayoutRate" value="${escapeAttr(drafts.payoutRate != null ? drafts.payoutRate : String(state.payoutRate))}" />
+        <span class="wl-hint" style="flex:1">% 실수령률 — 판매가에서 실제로 들어오는 비율 (전속 5:5면 50)</span>
+        <button class="wl-btn wl-btn--ghost" data-action="savePayoutRate">${ICONS.check}</button>
+      </div>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--num" inputmode="numeric" data-draft="goalRate" data-enter-action="saveGoalRate" value="${escapeAttr(drafts.goalRate != null ? drafts.goalRate : String(state.goalRate))}" />
+        <span class="wl-hint" style="flex:1">% 목표 비율 — 물건값이 수입의 이 비율이면 살 만하다고 봅니다</span>
+        <button class="wl-btn wl-btn--ghost" data-action="saveGoalRate">${ICONS.check}</button>
+      </div>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--num" inputmode="numeric" data-draft="avgWorkPrice" data-enter-action="saveAvgWorkPrice" value="${escapeAttr(drafts.avgWorkPrice != null ? drafts.avgWorkPrice : String(state.avgWorkPrice))}" />
+        <span class="wl-hint" style="flex:1">원 평균 작품가 — 목표를 작품 몇 점으로 환산할지의 기준</span>
+        <button class="wl-btn wl-btn--ghost" data-action="saveAvgWorkPrice">${ICONS.check}</button>
+      </div>
+      <div class="wl-hint">${formatMoney(state.avgWorkPrice)}짜리 한 점의 실수령은 ${formatMoney(netOf(state.avgWorkPrice))} · ${formatMoney(1000000)}짜리를 사려면 누적 ${formatMoney(goalTargetFor(1000000))} 필요</div>
     </div>`;
 }
 
@@ -2951,6 +2982,8 @@ function renderSettingsOverlay() {
             <button class="wl-btn wl-btn--ghost" data-action="closeSettings">닫기</button>
             <button class="wl-btn wl-btn--ghost" data-action="logout">로그아웃</button>
           </div>
+          ${state ? renderRulesSection() : ""}
+          ${state ? renderTagManageSection() : ""}
           ${state ? renderResetSection() : ""}` : ""}
       </div>
     </div>`;

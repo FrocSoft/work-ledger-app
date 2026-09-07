@@ -568,3 +568,6 @@ body {
 .wl-sale .wl-field-row { margin: 0; flex: 1 1 220px; }
 .wl-sale.is-sold { color: var(--wl-sales, var(--wl-work)); }
 .wl-goal-next-badge.is-essential { background: var(--wl-surface-2); color: var(--wl-save); }
+/* 설정 패널 안의 구획 — 매일 쓰지 않는 규칙·태그를 여기로 옮겼습니다. */
+.wl-settings-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--wl-border); }
+.wl-settings-block .wl-field-row { margin-top: 8px; }
