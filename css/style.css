@@ -212,8 +212,14 @@ body {
 .wl-timer-bar-fill { height: 100%; background: var(--wl-work); }
 .wl-timer-bar-fill.is-overtime { background: var(--wl-spend); }
 .wl-timer .wl-hint { margin: 2px 0 12px; }
-.wl-timer-actions { display: flex; gap: 8px; width: 100%; }
-.wl-timer-actions .wl-btn { flex: 1; }
+.wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
+.wl-timer-actions .wl-btn { flex: 1 1 40%; }
+/* A paused session drains the colour out of the card, so a forgotten pause is
+   obvious at a glance rather than looking like a stalled clock. */
+.wl-timer.is-paused .wl-timer-phase,
+.wl-timer.is-paused .wl-timer-task { color: var(--wl-text-muted); }
+.wl-timer.is-paused .wl-timer-clock { color: var(--wl-text-muted); opacity: .75; }
+.wl-timer.is-paused .wl-timer-bar-fill { background: var(--wl-text-muted); }
 
 .wl-spend-row { display: flex; gap: 8px; }
 .wl-spend-btn {

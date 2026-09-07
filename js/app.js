@@ -43,6 +43,8 @@ const ICONS = {
   archive: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"></path><line x1="10" y1="13" x2="14" y2="13"></line></svg>',
   bell: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>',
   pip: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect></svg>',
+  pause: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="4" x2="9" y2="20"></line><line x1="15" y1="4" x2="15" y2="20"></line></svg>',
+  resume: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>',
 };
 
 // ---- utils ----
@@ -329,17 +331,42 @@ function onTick() {
   }
 }
 
+// ---- paused time ----
+// A paused session keeps running on the wall clock but must not earn anything,
+// so every place that measures a session reads through these helpers instead of
+// subtracting startedAt directly. `pausedAt` is the pause currently open;
+// `pausedMs` / `segPausedMs` are the pauses already closed for the block and
+// for the stretch running on the current 할일.
+function bankedPause(active, now) {
+  const open = active.pausedAt ? Math.max(0, now - active.pausedAt) : 0;
+  return {
+    pausedMs: (active.pausedMs || 0) + open,
+    segPausedMs: (active.segPausedMs || 0) + open,
+  };
+}
+function activeElapsedMs(active, now = Date.now()) {
+  return Math.max(0, now - active.startedAt - bankedPause(active, now).pausedMs);
+}
+function segmentElapsedMs(active, now = Date.now()) {
+  const start = active.segmentStartedAt || active.startedAt;
+  return Math.max(0, now - start - bankedPause(active, now).segPausedMs);
+}
+function isPaused(active) {
+  return !!(active && active.pausedAt);
+}
+
 // What a running timer is showing right now, shared by the tab title and the
 // floating window so they never disagree.
 function runningTimerInfo() {
   const b = state.activeBlock;
   if (b) {
     const isBreak = b.phase === "break";
+    const elapsed = activeElapsedMs(b);
     return {
-      clock: formatClock(Date.now() - b.startedAt),
-      label: isBreak ? "휴식" : b.task,
-      accent: isBreak ? "#C9A227" : "#8FA876",
-      over: Date.now() - b.startedAt > (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
+      clock: formatClock(elapsed),
+      label: isPaused(b) ? `일시정지 · ${b.task}` : (isBreak ? "휴식" : b.task),
+      accent: isPaused(b) ? "#8C8474" : (isBreak ? "#C9A227" : "#8FA876"),
+      over: !isPaused(b) && elapsed > (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
     };
   }
   const s = state.activeSpend;
@@ -457,9 +484,10 @@ function openTimerWindow(note) {
     setInterval(function(){
       var t=window.wlTimer, c=document.getElementById("c"), l=document.getElementById("l");
       if(!t){c.textContent="--:--";c.style.color="#8C8474";l.textContent="진행 중인 블록 없음";return}
-      var s=Math.max(0,Math.round((Date.now()-t.startedAt)/1000));
+      var now=t.frozenAt||Date.now();
+      var s=Math.max(0,Math.round((now-t.startedAt)/1000));
       c.textContent=pad(Math.floor(s/60))+":"+pad(s%60);
-      c.style.color=(t.overAt&&Date.now()>t.overAt)?"#C0684A":t.accent;
+      c.style.color=(t.overAt&&now>t.overAt)?"#C0684A":t.accent;
       l.textContent=t.label;
       document.title=c.textContent+" · "+t.label;
     },500);
@@ -474,14 +502,20 @@ function syncTimerWindow() {
   const s = state.activeSpend;
   if (b) {
     const isBreak = b.phase === "break";
+    // The child ticks on its own, so it gets a start shifted forward by the
+    // paused time — and, while paused, the moment its clock should stop at.
+    // (an open pause needs no shift here — frozenAt stops the clock instead)
+    const virtualStart = b.startedAt + (b.pausedMs || 0);
     timerWindow.wlTimer = {
-      startedAt: b.startedAt, label: isBreak ? "휴식" : b.task,
-      accent: isBreak ? "#C9A227" : "#8FA876",
-      overAt: b.startedAt + (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
+      startedAt: virtualStart,
+      frozenAt: b.pausedAt || 0,
+      label: isPaused(b) ? `일시정지 · ${b.task}` : (isBreak ? "휴식" : b.task),
+      accent: isPaused(b) ? "#8C8474" : (isBreak ? "#C9A227" : "#8FA876"),
+      overAt: isPaused(b) ? 0 : virtualStart + (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
     };
   } else if (s) {
     timerWindow.wlTimer = {
-      startedAt: s.startedAt, label: s.label, accent: "#C0684A",
+      startedAt: s.startedAt, frozenAt: 0, label: s.label, accent: "#C0684A",
       overAt: s.startedAt + SPEND_INCLUDED_MIN * 60000,
     };
   } else {
@@ -493,10 +527,11 @@ function syncTimerWindow() {
 // crosses its target duration — a nudge for the manual-only timer.
 function maybeNotifyTimerDone() {
   if (!state.activeBlock) return;
-  const { id, phase: p, startedAt, task } = state.activeBlock;
+  const { id, phase: p, task } = state.activeBlock;
   const durationMs = (p === "work" ? WORK_MIN : BREAK_MIN) * 60000;
   const key = `${id}-${p}`;
-  if (Date.now() - startedAt < durationMs || notifiedKey === key) return;
+  // Paused time doesn't count, so the nudge waits for the real work to add up.
+  if (activeElapsedMs(state.activeBlock) < durationMs || notifiedKey === key) return;
   notifiedKey = key;
   sendNotification(
     p === "work" ? "작업 시간 완료" : "휴식 시간 완료",
@@ -590,7 +625,7 @@ function commitPendingSessionUpdate({ auto = false } = {}) {
   }
   const subtask = active.subtaskId ? w.subtasks.find((s) => s.id === active.subtaskId) : null;
   const block = findBlockById(active.id);
-  const minutes = block ? blockMinutes(block) : Math.max(0, Math.round((Date.now() - active.startedAt) / 60000));
+  const minutes = block ? blockMinutes(block) : Math.max(0, Math.round(activeElapsedMs(active) / 60000));
   const text = typed || `${subtask ? `[${subtask.name}] ` : ""}"${active.task}" 블록 완료 (${minutes}분)`;
   w.updates = w.updates || [];
   w.updates.unshift({
@@ -647,12 +682,27 @@ function startNextQueueItem() {
     id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
     linkedWorks: next.extraLinks || [],
     startedAt: now, phase: "work", segments: [], segmentStartedAt: now,
+    pausedMs: 0, segPausedMs: 0, pausedAt: null,
   };
+}
+// Pauses (and resumes) the running session. The wall clock keeps going, but
+// paused time is subtracted everywhere, so a pause earns nothing rather than
+// quietly inflating the block's 소요시간 and its points.
+function togglePauseSession() {
+  const active = state.activeBlock;
+  if (!active || active.phase !== "work") return;
+  const now = Date.now();
+  if (active.pausedAt) {
+    const banked = bankedPause(active, now);
+    state.activeBlock = { ...active, ...banked, pausedAt: null };
+  } else {
+    state.activeBlock = { ...active, pausedAt: now };
+  }
+  persistAndRender();
 }
 // Closes the stretch of the session that ran on the current 할일.
 function closedSegments(active, at) {
-  const startedAt = active.segmentStartedAt || active.startedAt;
-  const minutes = Math.max(0, Math.round((at - startedAt) / 60000));
+  const minutes = Math.max(0, Math.round(segmentElapsedMs(active, at) / 60000));
   return [...(active.segments || []), {
     workId: active.workId || null, subtaskId: active.subtaskId || null, task: active.task, minutes,
   }];
@@ -684,6 +734,11 @@ function switchSessionWork(linkIndex) {
     task: task || current.task,
     linkedWorks: linked,
     segmentStartedAt: now,
+    // The pause so far belongs to the 할일 we're leaving; a pause still open
+    // carries on from here for the new one.
+    pausedMs: bankedPause(current, now).pausedMs,
+    segPausedMs: 0,
+    pausedAt: current.pausedAt ? now : null,
     noted: false,
   };
   drafts.switchDraft = { task: "", workId: "", subtaskId: "" };
@@ -702,7 +757,7 @@ function completeActiveBlock() {
   const blocks = state.blocksByDate[day] || [];
   const completedAt = Date.now();
   const segments = closedSegments(state.activeBlock, completedAt);
-  const minutes = Math.max(0, Math.round((completedAt - state.activeBlock.startedAt) / 60000));
+  const minutes = Math.max(0, Math.round(activeElapsedMs(state.activeBlock, completedAt) / 60000));
   const points = computeBlockPoints(segmentsBasePoints(segments), minutes);
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
@@ -717,7 +772,10 @@ function completeActiveBlock() {
     state.savings += repaid;
     state.borrowedByDate[day] = owed - repaid;
   }
-  state.activeBlock = { ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt };
+  state.activeBlock = {
+    ...state.activeBlock, phase: "break", startedAt: Date.now(), completedAt: newBlock.completedAt,
+    pausedMs: 0, segPausedMs: 0, pausedAt: null,
+  };
   persistAndRender();
 }
 
@@ -1369,25 +1427,25 @@ function renderImagePicker({ value, pickAction, clearAction, work, cat }) {
 }
 
 // ---- render: column 1 — time block ----
-function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, workId, subtaskId }) {
+function renderTimerBlock({ label, phaseLabel, durationMin, elapsed, isBreak, paused, pausedMin, workId, subtaskId }) {
   const durationMs = durationMin * 60000;
-  const elapsed = Date.now() - startedAt;
-  const overtime = elapsed > durationMs;
+  const overtime = !paused && elapsed > durationMs;
   const pct = Math.min(100, (elapsed / durationMs) * 100);
   return `
-    <div class="wl-timer">
+    <div class="wl-timer ${paused ? "is-paused" : ""}">
       <div class="wl-timer-top">
-        <span class="wl-timer-phase ${isBreak ? "is-break" : ""}">${isBreak ? ICONS.coffee : ICONS.square} ${phaseLabel}</span>
+        <span class="wl-timer-phase ${isBreak ? "is-break" : ""}">${paused ? `${ICONS.pause} 일시정지` : `${isBreak ? ICONS.coffee : ICONS.square} ${phaseLabel}`}</span>
         <span class="wl-timer-clock ${overtime ? "is-overtime" : ""}" id="wl-timer-clock">${formatClock(elapsed)}</span>
       </div>
       <div class="wl-timer-task">${escapeHtml(label)}</div>
       <div class="wl-timer-bar"><div class="wl-timer-bar-fill ${overtime ? "is-overtime" : ""}" id="wl-timer-bar-fill" style="width:${pct}%"></div></div>
-      <div class="wl-hint">목표 ${durationMin}분${overtime ? " · 목표 시간을 초과했어요" : ""}</div>
+      <div class="wl-hint">목표 ${durationMin}분${overtime ? " · 목표 시간을 초과했어요" : ""}${pausedMin > 0 ? ` · 일시정지 ${pausedMin}분은 빠짐` : ""}</div>
       ${!isBreak ? renderSessionSegments() : ""}
       ${!isBreak ? renderLinkedWorkChips() : ""}
       <div class="wl-timer-actions">
         ${!isBreak ? `
           <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 완료</button>
+          <button class="wl-btn wl-btn--ghost" data-action="togglePauseSession">${paused ? `${ICONS.resume} 계속` : `${ICONS.pause} 일시정지`}</button>
           <button class="wl-btn wl-btn--ghost" data-action="toggleSwitchForm">${ICONS.chevron} 할일 전환</button>
           <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
@@ -1406,7 +1464,7 @@ function renderSessionSegments() {
   const active = state.activeBlock;
   const done = active.segments || [];
   if (done.length === 0) return "";
-  const soFar = Math.max(0, Math.round((Date.now() - (active.segmentStartedAt || active.startedAt)) / 60000));
+  const soFar = Math.max(0, Math.round(segmentElapsedMs(active) / 60000));
   return `
     <div class="wl-seg-track">
       ${done.map((s) => `<span class="wl-seg">${escapeHtml(workName(s.workId))} <b>${s.minutes}분</b></span>`).join("")}
@@ -1491,20 +1549,17 @@ function updateTimerDisplay() {
   const clockEl = document.getElementById("wl-timer-clock");
   const barEl = document.getElementById("wl-timer-bar-fill");
   if (!clockEl || !barEl) return;
-  const { phase: p, startedAt } = state.activeBlock;
-  const durationMs = (p === "work" ? WORK_MIN : BREAK_MIN) * 60000;
-  const elapsed = Date.now() - startedAt;
-  const overtime = elapsed > durationMs;
+  const active = state.activeBlock;
+  const durationMs = (active.phase === "work" ? WORK_MIN : BREAK_MIN) * 60000;
+  const elapsed = activeElapsedMs(active);
+  const overtime = !isPaused(active) && elapsed > durationMs;
   const pct = Math.min(100, (elapsed / durationMs) * 100);
   clockEl.textContent = formatClock(elapsed);
   clockEl.classList.toggle("is-overtime", overtime);
   barEl.style.width = `${pct}%`;
   barEl.classList.toggle("is-overtime", overtime);
   const segEl = document.getElementById("wl-seg-current");
-  if (segEl) {
-    const segStart = state.activeBlock.segmentStartedAt || startedAt;
-    segEl.textContent = `${Math.max(0, Math.round((Date.now() - segStart) / 60000))}분째`;
-  }
+  if (segEl) segEl.textContent = `${Math.max(0, Math.round(segmentElapsedMs(active) / 60000))}분째`;
 }
 
 function updateSpendTimerDisplay() {
@@ -1583,9 +1638,15 @@ function renderTimeBlockColumn() {
   return `
     <section class="wl-card">
       ${active
-        ? renderTimerBlock(active.phase === "work"
-            ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, startedAt: active.startedAt, isBreak: false, workId: active.workId, subtaskId: active.subtaskId }
-            : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, startedAt: active.startedAt, isBreak: true, workId: active.workId, subtaskId: active.subtaskId })
+        ? renderTimerBlock({
+            elapsed: activeElapsedMs(active),
+            paused: isPaused(active),
+            pausedMin: Math.floor(bankedPause(active, Date.now()).pausedMs / 60000),
+            workId: active.workId, subtaskId: active.subtaskId,
+            ...(active.phase === "work"
+              ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, isBreak: false }
+              : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, isBreak: true }),
+          })
         : `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 계획을 짜고 시작해보세요.</div>`}
     </section>
     <section class="wl-card">
@@ -2302,6 +2363,7 @@ function render() {
 function runAction(name, ds) {
   switch (name) {
     case "finishEarly": finishEarly(); break;
+    case "togglePauseSession": togglePauseSession(); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
     case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
