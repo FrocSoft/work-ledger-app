@@ -2020,6 +2020,22 @@ function renderTodaySummaryColumn() {
     </section>`;
 }
 
+function manualPreviewText() {
+  const p = manualBlockPreview();
+  if (!p) return "시작 시각과 소요시간을 넣으면 점수가 미리 보여요.";
+  return `${formatTime(p.startedAt)}–${formatTime(p.completedAt)} · ${p.minutes}분 → <b>${p.points}점</b>`
+    + (p.points === 0 ? " (25분 이하는 기록만)" : "");
+}
+// 입력 중에는 화면을 다시 그리지 않고 미리보기 줄만 바꿉니다. render()는
+// innerHTML을 통째로 갈아끼우기 때문에, 타이핑 중에 부르면 방금 누른 칸이
+// 사라져 포커스가 날아갑니다.
+function updateManualPreview() {
+  const el = document.getElementById("wl-manual-preview");
+  if (el) el.innerHTML = manualPreviewText();
+  const btn = document.getElementById("wl-manual-add");
+  if (btn) btn.disabled = !(manualBlockPreview() && drafts.manualBlock.task.trim());
+}
+
 // 타이머 없이 한 일을 직접 적어 넣는 폼. 시작 시각을 직접 넣기 때문에
 // 완료 후 소요시간만 고치는 우회로와 달리 기록된 시간대가 실제와 맞습니다.
 function renderManualBlockForm() {
@@ -2040,10 +2056,8 @@ function renderManualBlockForm() {
         <input class="wl-input wl-input--sm" type="time" data-draft="manualTime" value="${escapeAttr(d.time)}" />
         <input class="wl-input wl-input--num" placeholder="분" inputmode="numeric" data-draft="manualMinutes" data-enter-action="addManualBlock" value="${escapeAttr(d.minutes)}" />
       </div>
-      <div class="wl-hint">${p
-        ? `${formatTime(p.startedAt)}–${formatTime(p.completedAt)} · ${p.minutes}분 → <b>${p.points}점</b>${p.points === 0 ? " (25분 이하는 기록만)" : ""}`
-        : "시작 시각과 소요시간을 넣으면 점수가 미리 보여요."}</div>
-      <button class="wl-btn wl-btn--primary wl-btn--full" data-action="addManualBlock"${p && d.task.trim() ? "" : " disabled"}>${ICONS.plus} 기록 추가</button>
+      <div class="wl-hint" id="wl-manual-preview">${manualPreviewText()}</div>
+      <button class="wl-btn wl-btn--primary wl-btn--full" id="wl-manual-add" data-action="addManualBlock"${p && d.task.trim() ? "" : " disabled"}>${ICONS.plus} 기록 추가</button>
     </div>`;
 }
 
@@ -2763,11 +2777,10 @@ function onRootInput(e) {
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "pendingUpdateCostLabel": drafts.pendingUpdate.costLabel = value; break;
     case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;
-    case "manualTask": drafts.manualBlock.task = value; break;
-    // 시각과 분은 점수 미리보기를 즉시 갱신해야 하므로 다시 그립니다.
-    case "manualDate": drafts.manualBlock.date = value; render(); break;
-    case "manualTime": drafts.manualBlock.time = value; render(); break;
-    case "manualMinutes": drafts.manualBlock.minutes = clampNumeric(); render(); break;
+    case "manualTask": drafts.manualBlock.task = value; updateManualPreview(); break;
+    case "manualDate": drafts.manualBlock.date = value; updateManualPreview(); break;
+    case "manualTime": drafts.manualBlock.time = value; updateManualPreview(); break;
+    case "manualMinutes": drafts.manualBlock.minutes = clampNumeric(); updateManualPreview(); break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
     case "editCategoryName": editingCategoryDraft = value; break;
