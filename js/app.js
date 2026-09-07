@@ -72,7 +72,7 @@ function spentTotal(spends) {
   return (spends || []).reduce((a, s) => a + s.cost, 0);
 }
 function mergeLog(blocks, spends) {
-  const b = blocks.map((x) => ({ id: x.id, kind: "block", label: x.task, at: x.completedAt, points: blockPoints(x) }));
+  const b = blocks.map((x) => ({ id: x.id, kind: "block", label: x.task, at: x.completedAt, points: blockPoints(x), block: x }));
   const s = spends.map((x) => ({ id: x.id, kind: "spend", label: x.label, cost: x.cost, at: x.at }));
   return [...b, ...s].sort((a, c) => c.at - a.at);
 }
@@ -88,13 +88,28 @@ function pointsForWork(workId) {
   const tag = w && w.tagId ? state.tags.find((t) => t.id === w.tagId) : null;
   return tag ? tag.points : 1;
 }
+// A session can cover more than one 할일: switching mid-session splits it into
+// segments instead of ending the block. Blocks recorded before that existed
+// (and single-할일 sessions) read back as one segment.
+function blockSegments(b) {
+  if (b.segments && b.segments.length) return b.segments;
+  return [{ workId: b.workId || null, subtaskId: b.subtaskId || null, task: b.task, minutes: blockMinutes(b) }];
+}
+// Scoring uses one tag value for the whole session, weighted by how long each
+// 할일 got — so splitting a session honestly scores about the same as spending
+// it all on one thing, instead of being punished by the under-50분 rules.
+function segmentsBasePoints(segments) {
+  const total = segments.reduce((a, s) => a + s.minutes, 0);
+  if (total <= 0) return pointsForWork(segments.length ? segments[0].workId : null);
+  return segments.reduce((a, s) => a + pointsForWork(s.workId) * s.minutes, 0) / total;
+}
 // 25분 이하로 끝내면 기록만 하고 점수 없음, 25~50분이면 절반,
 // 목표 시간(50분)을 채우면 정상 지급 + 초과 25분마다 1점 보너스.
 function computeBlockPoints(basePoints, minutes) {
   if (minutes <= 25) return 0;
   if (minutes < WORK_MIN) return Math.round(basePoints / 2);
   const overtimeBonus = Math.floor((minutes - WORK_MIN) / 25);
-  return basePoints + overtimeBonus;
+  return Math.round(basePoints) + overtimeBonus;
 }
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
@@ -207,6 +222,7 @@ let spendPresetsEditOpen = false;
 let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
+let switchFormOpen = false;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -225,6 +241,7 @@ const drafts = {
   newTier: {},
   newCost: {},
   queueDraft: { task: "", workId: "", subtaskId: "" },
+  switchDraft: { task: "", workId: "", subtaskId: "" },
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -435,10 +452,48 @@ function endSession({ auto = true } = {}) {
 function startNextQueueItem() {
   if (state.queue.length === 0) return;
   const next = state.queue.shift();
+  const now = Date.now();
   state.activeBlock = {
     id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
-    startedAt: Date.now(), phase: "work",
+    startedAt: now, phase: "work", segments: [], segmentStartedAt: now,
   };
+}
+// Closes the stretch of the session that ran on the current 할일.
+function closedSegments(active, at) {
+  const startedAt = active.segmentStartedAt || active.startedAt;
+  const minutes = Math.max(0, Math.round((at - startedAt) / 60000));
+  return [...(active.segments || []), {
+    workId: active.workId || null, subtaskId: active.subtaskId || null, task: active.task, minutes,
+  }];
+}
+// Switches 할일 without ending the session: the time so far is banked as a
+// segment and the clock keeps running.
+function switchSessionWork() {
+  const active = state.activeBlock;
+  if (!active || active.phase !== "work") return;
+  const d = drafts.switchDraft;
+  const task = d.task.trim();
+  if (!d.workId && !task) return;
+  commitPendingSessionUpdate(); // any note belongs to the 할일 we're leaving
+  const now = Date.now();
+  const current = state.activeBlock;
+  state.activeBlock = {
+    ...current,
+    segments: closedSegments(current, now),
+    workId: d.workId || null,
+    subtaskId: d.subtaskId || null,
+    task: task || current.task,
+    segmentStartedAt: now,
+    noted: false,
+  };
+  drafts.switchDraft = { task: "", workId: "", subtaskId: "" };
+  switchFormOpen = false;
+  persistAndRender();
+}
+function toggleSwitchForm() {
+  switchFormOpen = !switchFormOpen;
+  if (switchFormOpen) drafts.switchDraft = { task: "", workId: "", subtaskId: "" };
+  render();
 }
 
 function completeActiveBlock() {
@@ -446,12 +501,14 @@ function completeActiveBlock() {
   const day = todayKey();
   const blocks = state.blocksByDate[day] || [];
   const completedAt = Date.now();
+  const segments = closedSegments(state.activeBlock, completedAt);
   const minutes = Math.max(0, Math.round((completedAt - state.activeBlock.startedAt) / 60000));
-  const points = computeBlockPoints(pointsForWork(state.activeBlock.workId), minutes);
+  const points = computeBlockPoints(segmentsBasePoints(segments), minutes);
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
     completedAt, points, minutes,
+    ...(segments.length > 1 ? { segments } : {}),
   };
   state.blocksByDate[day] = [...blocks, newBlock];
   const owed = state.borrowedByDate[day] || 0;
@@ -738,14 +795,23 @@ function workSessionStats(workId) {
   let count = 0;
   let minutes = 0;
   Object.values(state.blocksByDate).forEach((blocks) => {
-    (blocks || []).forEach((b) => { if (b.workId === workId) { count += 1; minutes += blockMinutes(b); } });
+    (blocks || []).forEach((b) => {
+      const mine = blockSegments(b).filter((s) => s.workId === workId);
+      if (mine.length === 0) return;
+      count += 1;
+      minutes += mine.reduce((a, s) => a + s.minutes, 0);
+    });
   });
   return { count, minutes };
 }
 function subtaskMinutes(workId, subtaskId) {
   let minutes = 0;
   Object.values(state.blocksByDate).forEach((blocks) => {
-    (blocks || []).forEach((b) => { if (b.workId === workId && b.subtaskId === subtaskId) minutes += blockMinutes(b); });
+    (blocks || []).forEach((b) => {
+      blockSegments(b).forEach((s) => {
+        if (s.workId === workId && s.subtaskId === subtaskId) minutes += s.minutes;
+      });
+    });
   });
   return minutes;
 }
@@ -768,6 +834,16 @@ function saveEditBlockMinutes() {
   if (!b) return;
   const mins = Number(editingBlockMinutesDraft);
   if (!Number.isFinite(mins) || mins < 0) return;
+  // Keep a multi-할일 session's segments adding up to the corrected total.
+  if (b.segments && b.segments.length > 1) {
+    const old = b.segments.reduce((a, s) => a + s.minutes, 0);
+    let left = mins;
+    b.segments = b.segments.map((s, i) => {
+      const share = i === b.segments.length - 1 ? left : Math.round(old > 0 ? (s.minutes / old) * mins : mins / b.segments.length);
+      left -= share;
+      return { ...s, minutes: Math.max(0, share) };
+    });
+  }
   b.minutes = mins;
   editingBlockId = null;
   persistAndRender();
@@ -1078,13 +1154,57 @@ function renderTimerBlock({ label, phaseLabel, durationMin, startedAt, isBreak, 
       <div class="wl-timer-task">${escapeHtml(label)}</div>
       <div class="wl-timer-bar"><div class="wl-timer-bar-fill ${overtime ? "is-overtime" : ""}" id="wl-timer-bar-fill" style="width:${pct}%"></div></div>
       <div class="wl-hint">목표 ${durationMin}분${overtime ? " · 목표 시간을 초과했어요" : ""}</div>
+      ${!isBreak ? renderSessionSegments() : ""}
       <div class="wl-timer-actions">
         ${!isBreak ? `
           <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 완료</button>
+          <button class="wl-btn wl-btn--ghost" data-action="toggleSwitchForm">${ICONS.chevron} 할일 전환</button>
           <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
+      ${!isBreak && switchFormOpen ? renderSwitchForm() : ""}
       ${workId ? renderSessionUpdateComposer(workId, subtaskId, isBreak) : ""}
+    </div>`;
+}
+
+function workName(workId) {
+  const w = workId ? state.works.find((x) => x.id === workId) : null;
+  return w ? w.name : "연결 없음";
+}
+// The 할일 this session has already covered, so a switch doesn't hide history.
+function renderSessionSegments() {
+  const active = state.activeBlock;
+  const done = active.segments || [];
+  if (done.length === 0) return "";
+  const soFar = Math.max(0, Math.round((Date.now() - (active.segmentStartedAt || active.startedAt)) / 60000));
+  return `
+    <div class="wl-seg-track">
+      ${done.map((s) => `<span class="wl-seg">${escapeHtml(workName(s.workId))} <b>${s.minutes}분</b></span>`).join("")}
+      <span class="wl-seg is-current">${escapeHtml(workName(active.workId))} <b id="wl-seg-current">${soFar}분째</b></span>
+    </div>`;
+}
+function renderSwitchForm() {
+  const d = drafts.switchDraft;
+  const activeWorks = state.works.filter((w) => !w.archived);
+  const selected = activeWorks.find((w) => w.id === d.workId);
+  return `
+    <div class="wl-switch-form">
+      <div class="wl-hint">지금까지 한 시간은 그대로 기록되고, 타이머는 멈추지 않아요.</div>
+      <div class="wl-field-row wl-field-row--tight">
+        <select class="wl-select" data-select="switchWork">
+          <option value="">할일 선택</option>
+          ${activeWorks.map((w) => `<option value="${w.id}" ${d.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
+        </select>
+        ${selected && selected.subtasks.length > 0 ? `
+          <select class="wl-select" data-select="switchSub">
+            <option value="">하위 할일 선택 안 함</option>
+            ${selected.subtasks.map((st) => `<option value="${st.id}" ${d.subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
+          </select>` : ""}
+      </div>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--sm" placeholder="이제 할 일 (비우면 유지)" data-draft="switchTask" data-enter-action="switchSessionWork" value="${escapeAttr(d.task)}" />
+        <button class="wl-btn wl-btn--primary" data-action="switchSessionWork">전환</button>
+      </div>
     </div>`;
 }
 
@@ -1126,6 +1246,11 @@ function updateTimerDisplay() {
   clockEl.classList.toggle("is-overtime", overtime);
   barEl.style.width = `${pct}%`;
   barEl.classList.toggle("is-overtime", overtime);
+  const segEl = document.getElementById("wl-seg-current");
+  if (segEl) {
+    const segStart = state.activeBlock.segmentStartedAt || startedAt;
+    segEl.textContent = `${Math.max(0, Math.round((Date.now() - segStart) / 60000))}분째`;
+  }
 }
 
 function updateSpendTimerDisplay() {
@@ -1323,14 +1448,41 @@ function renderTodaySummaryColumn() {
       <div class="wl-card-title">오늘의 기록</div>
       ${todayBlocks.length === 0 && todaySpends.length === 0 ? `<div class="wl-empty">아직 기록이 없어요.</div>` : ""}
       <ul class="wl-log">
-        ${mergeLog(todayBlocks, todaySpends).map((item) => `
-          <li class="wl-log-row wl-log-row--${item.kind}">
+        ${mergeLog(todayBlocks, todaySpends).map((item) => item.kind === "block" ? renderBlockLogRow(item.block) : `
+          <li class="wl-log-row wl-log-row--spend">
             <span class="wl-log-time">${formatTime(item.at)}</span>
-            <span class="wl-log-label">${escapeHtml(item.label)}</span>
-            <span class="wl-log-points">${item.kind === "block" ? `+${item.points}` : `-${item.cost}`}</span>
+            <div class="wl-log-main"><div class="wl-log-label">${escapeHtml(item.label)}</div></div>
+            <span class="wl-log-points">-${item.cost}</span>
           </li>`).join("")}
       </ul>
     </section>`;
+}
+
+// Notes written during a session, so the log shows what actually happened and
+// not just the task that was planned.
+function blockNotes(blockId) {
+  const out = [];
+  state.works.forEach((w) => (w.updates || []).forEach((u) => {
+    if (u.blockId === blockId && !u.auto) out.push(u.text);
+  }));
+  return out;
+}
+function renderBlockLogRow(b) {
+  const segs = blockSegments(b);
+  const tasks = [...new Set(segs.map((s) => s.task).filter(Boolean))];
+  const notes = blockNotes(b.id);
+  return `
+    <li class="wl-log-row wl-log-row--block">
+      <span class="wl-log-time">${formatTime(b.completedAt)}</span>
+      <div class="wl-log-main">
+        <div class="wl-log-works">
+          ${segs.map((s) => `<span class="wl-log-work">${escapeHtml(workName(s.workId))}<b>${s.minutes}분</b></span>`).join("")}
+        </div>
+        ${tasks.length ? `<div class="wl-log-label">${escapeHtml(tasks.join(" · "))}</div>` : ""}
+        ${notes.map((n) => `<div class="wl-log-note">${escapeHtml(n)}</div>`).join("")}
+      </div>
+      <span class="wl-log-points">+${blockPoints(b)}</span>
+    </li>`;
 }
 
 // ---- render: column 4 — savings + goals ----
@@ -1891,6 +2043,8 @@ function runAction(name, ds) {
     case "addToQueue": addToQueue(); break;
     case "removeFromQueue": removeFromQueue(ds.id); break;
     case "startQueue": startQueue(); break;
+    case "toggleSwitchForm": toggleSwitchForm(); break;
+    case "switchSessionWork": switchSessionWork(); break;
     case "toggleGoalCategory": toggleGoalCategoryExpand(ds.cat); break;
     case "addTag": addTag(); break;
     case "removeTag": removeTag(ds.tag); break;
@@ -1979,6 +2133,7 @@ function onRootInput(e) {
       break;
     }
     case "queueTask": drafts.queueDraft.task = value; break;
+    case "switchTask": drafts.switchDraft.task = value; break;
     case "settingsToken": drafts.settings.token = value; break;
     case "settingsOwner": drafts.settings.owner = value; break;
     case "settingsRepo": drafts.settings.repo = value; break;
@@ -2013,6 +2168,8 @@ async function onRootChange(e) {
     const kind = select.dataset.select;
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
+    if (kind === "switchWork") { drafts.switchDraft.workId = select.value; drafts.switchDraft.subtaskId = ""; render(); }
+    if (kind === "switchSub") { drafts.switchDraft.subtaskId = select.value; }
     if (kind === "newWorkTag") { drafts.newWorkTag = select.value; }
     if (kind === "editWorkTag") { editingWorkDraft.tagId = select.value; }
   }
