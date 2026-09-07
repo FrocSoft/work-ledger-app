@@ -195,6 +195,10 @@ body {
 .wl-btn--primary:disabled { background: var(--wl-surface-2); border-color: var(--wl-border); color: var(--wl-text-muted); cursor: not-allowed; }
 .wl-btn--ghost { background: none; }
 .wl-btn--danger { background: var(--wl-spend); border-color: var(--wl-spend); color: #1B1917; font-weight: 600; }
+/* 중단 discards the session, so it deliberately does NOT compete for the eye
+   with the buttons beside it — recessed until you go looking for it. */
+.wl-btn--quiet { background: none; border-color: transparent; color: var(--wl-text-muted); }
+.wl-btn--quiet:hover { border-color: var(--wl-spend); color: var(--wl-spend); }
 .wl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .wl-icon-btn { background: none; border: none; color: var(--wl-text-muted); cursor: pointer; padding: 4px; display: inline-flex; }
 .wl-icon-btn:hover { color: var(--wl-text); }
@@ -214,6 +218,12 @@ body {
 .wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .wl-timer-actions .wl-btn { flex: 1 1 40%; }
+/* The undo offer that takes the place of the empty timer card after a cancel. */
+.wl-undo { display: flex; align-items: center; gap: 12px; padding: 14px 4px; }
+.wl-undo-text { flex: 1; min-width: 0; }
+.wl-undo-title { font-size: 14px; margin-bottom: 2px; }
+.wl-undo .wl-btn { flex: 0 0 auto; }
+
 /* Session self-rating, shown on the break screen. The three buttons print the
    points each choice lands on, so the trade-off is visible before clicking. */
 .wl-rating { width: 100%; margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--wl-border); }
