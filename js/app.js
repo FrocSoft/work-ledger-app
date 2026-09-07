@@ -223,8 +223,6 @@ let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
 let switchFormOpen = false;
-let queueExtraPickerOpen = false;
-let updateExtraPickerOpen = false;
 let costListOpen = {};
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
@@ -238,12 +236,12 @@ const drafts = {
   newTagPoints: "",
   newPresetLabel: "",
   newPresetCost: "",
-  pendingUpdate: { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraWorkIds: [] },
+  pendingUpdate: { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraLinks: [] },
   newRevenueAmount: "",
   newCategoryName: "",
   newTier: {},
   newCost: {},
-  queueDraft: { task: "", workId: "", subtaskId: "", extraWorkIds: [] },
+  queueDraft: { task: "", workId: "", subtaskId: "", extraLinks: [] },
   switchDraft: { task: "", workId: "", subtaskId: "" },
   settings: null,
   settingsMsg: null,
@@ -431,13 +429,16 @@ function commitPendingSessionUpdate({ auto = false } = {}) {
     id: uid(), text, image: draft.image || null, at: active.completedAt || Date.now(),
     auto: !typed, blockId: active.id,
   });
-  // The same note can be filed against other 할일 this session touched.
-  draft.extraWorkIds.forEach((id) => {
-    const other = state.works.find((x) => x.id === id);
+  // The same note can be filed against other 할일 this session touched, each
+  // with its own 하위 할일 if one was picked.
+  draft.extraLinks.forEach((link) => {
+    const other = link.workId ? state.works.find((x) => x.id === link.workId) : null;
     if (!other || other.id === w.id) return;
+    const otherSub = link.subtaskId ? (other.subtasks || []).find((s) => s.id === link.subtaskId) : null;
     other.updates = other.updates || [];
     other.updates.unshift({
-      id: uid(), text, image: draft.image || null, at: active.completedAt || Date.now(),
+      id: uid(), text: otherSub ? `[${otherSub.name}] ${text}` : text,
+      image: draft.image || null, at: active.completedAt || Date.now(),
       auto: !typed, blockId: active.id,
     });
   });
@@ -447,24 +448,15 @@ function commitPendingSessionUpdate({ auto = false } = {}) {
   }
   if (subtask && draft.subtaskDone) subtask.done = true;
   state.activeBlock = { ...active, noted: true };
-  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraWorkIds: [] };
-  updateExtraPickerOpen = false;
+  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraLinks: [] };
   return true;
 }
-function addUpdateExtraWork(workId) {
-  if (!workId) return;
-  const d = drafts.pendingUpdate;
-  const activeWorkId = state.activeBlock ? state.activeBlock.workId : null;
-  if (workId !== activeWorkId && !d.extraWorkIds.includes(workId)) d.extraWorkIds.push(workId);
-  updateExtraPickerOpen = false;
+function addUpdateExtraLink() {
+  drafts.pendingUpdate.extraLinks.push({ workId: "", subtaskId: "" });
   render();
 }
-function removeUpdateExtraWork(workId) {
-  drafts.pendingUpdate.extraWorkIds = drafts.pendingUpdate.extraWorkIds.filter((id) => id !== workId);
-  render();
-}
-function toggleUpdateExtraPicker() {
-  updateExtraPickerOpen = !updateExtraPickerOpen;
+function removeUpdateExtraLink(index) {
+  drafts.pendingUpdate.extraLinks.splice(Number(index), 1);
   render();
 }
 function savePendingSessionUpdate() {
@@ -485,7 +477,7 @@ function startNextQueueItem() {
   const now = Date.now();
   state.activeBlock = {
     id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
-    linkedWorkIds: next.extraWorkIds || [],
+    linkedWorks: next.extraLinks || [],
     startedAt: now, phase: "work", segments: [], segmentStartedAt: now,
   };
 }
@@ -499,26 +491,30 @@ function closedSegments(active, at) {
 }
 // Switches 할일 without ending the session: the time so far is banked as a
 // segment and the clock keeps running.
-function switchSessionWork(targetWorkId) {
+function switchSessionWork(linkIndex) {
   const active = state.activeBlock;
   if (!active || active.phase !== "work") return;
   const d = drafts.switchDraft;
-  const fromChip = !!targetWorkId;
-  const workId = fromChip ? targetWorkId : d.workId;
-  const task = fromChip ? "" : d.task.trim();
+  const chip = linkIndex != null ? (active.linkedWorks || [])[Number(linkIndex)] : null;
+  const workId = chip ? chip.workId : d.workId;
+  const task = chip ? "" : d.task.trim();
   if (!workId && !task) return;
-  if (fromChip && workId === active.workId) return;
+  if (chip && workId === active.workId) return;
   commitPendingSessionUpdate(); // any note belongs to the 할일 we're leaving
   const now = Date.now();
   const current = state.activeBlock;
-  const linked = [...new Set([...(current.linkedWorkIds || []), current.workId].filter(Boolean))];
+  // The 할일 being left stays available to switch back to.
+  const linked = [
+    ...(current.linkedWorks || []).filter((l) => l.workId !== workId),
+    ...(current.workId ? [{ workId: current.workId, subtaskId: current.subtaskId || null }] : []),
+  ].filter((l, i, arr) => arr.findIndex((x) => x.workId === l.workId) === i);
   state.activeBlock = {
     ...current,
     segments: closedSegments(current, now),
     workId: workId || null,
-    subtaskId: fromChip ? null : (d.subtaskId || null),
+    subtaskId: chip ? (chip.subtaskId || null) : (d.subtaskId || null),
     task: task || current.task,
-    linkedWorkIds: linked.filter((id) => id !== workId),
+    linkedWorks: linked,
     segmentStartedAt: now,
     noted: false,
   };
@@ -568,27 +564,21 @@ function addToQueue() {
   if (!task) return;
   state.queue.push({
     id: uid(), task, workId: drafts.queueDraft.workId || null, subtaskId: drafts.queueDraft.subtaskId || null,
-    extraWorkIds: [...drafts.queueDraft.extraWorkIds],
+    extraLinks: drafts.queueDraft.extraLinks
+      .filter((l) => l.workId && l.workId !== drafts.queueDraft.workId)
+      .map((l) => ({ workId: l.workId, subtaskId: l.subtaskId || null })),
   });
-  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraWorkIds: [] };
-  queueExtraPickerOpen = false;
+  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraLinks: [] };
   persistAndRender();
 }
-// Extra 할일 planned into one block: they show up as one-tap switch targets
-// once it starts, so covering several 할일 doesn't mean digging through a menu.
-function addQueueExtraWork(workId) {
-  if (!workId) return;
-  const d = drafts.queueDraft;
-  if (workId !== d.workId && !d.extraWorkIds.includes(workId)) d.extraWorkIds.push(workId);
-  queueExtraPickerOpen = false;
+// Extra 할일 planned into one block. Each gets the same 할일/하위 할일 pair as
+// the first one, and they become one-tap switch targets once the block starts.
+function addQueueExtraLink() {
+  drafts.queueDraft.extraLinks.push({ workId: "", subtaskId: "" });
   render();
 }
-function removeQueueExtraWork(workId) {
-  drafts.queueDraft.extraWorkIds = drafts.queueDraft.extraWorkIds.filter((id) => id !== workId);
-  render();
-}
-function toggleQueueExtraPicker() {
-  queueExtraPickerOpen = !queueExtraPickerOpen;
+function removeQueueExtraLink(index) {
+  drafts.queueDraft.extraLinks.splice(Number(index), 1);
   render();
 }
 function removeFromQueue(id) {
@@ -1153,8 +1143,8 @@ function doReset(scope) {
   editingTagId = null;
   editingPresetId = null;
   notifiedKey = null;
-  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraWorkIds: [] };
-  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraWorkIds: [] };
+  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraLinks: [] };
+  drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraLinks: [] };
   settingsOpen = false;
   persistAndRender();
 }
@@ -1241,14 +1231,19 @@ function renderSessionSegments() {
 }
 // 할일 planned into this block but not currently running — one tap switches.
 function renderLinkedWorkChips() {
-  const linked = (state.activeBlock.linkedWorkIds || []).filter((id) => id !== state.activeBlock.workId);
+  const active = state.activeBlock;
+  const linked = (active.linkedWorks || []).filter((l) => l.workId !== active.workId);
   if (linked.length === 0) return "";
   return `
     <div class="wl-chip-row">
-      ${linked.map((id) => `
-        <button class="wl-chip is-action" data-action="switchToLinkedWork" data-work="${id}">
-          ${ICONS.chevron} ${escapeHtml(workName(id))}(으)로 전환
-        </button>`).join("")}
+      ${linked.map((l, i) => {
+        const w = state.works.find((x) => x.id === l.workId);
+        const sub = l.subtaskId && w ? (w.subtasks || []).find((s) => s.id === l.subtaskId) : null;
+        return `
+        <button class="wl-chip is-action" data-action="switchToLinkedWork" data-index="${i}">
+          ${ICONS.chevron} ${escapeHtml(workName(l.workId))}${sub ? ` · ${escapeHtml(sub.name)}` : ""}
+        </button>`;
+      }).join("")}
     </div>`;
 }
 function renderSwitchForm() {
@@ -1292,25 +1287,13 @@ function renderSessionUpdateComposer(workId, subtaskId, isBreak) {
         <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="pendingUpdateCostAmount" data-enter-action="savePendingUpdate" value="${escapeAttr(draft.costAmount)}" />
         <button class="wl-btn wl-btn--ghost" data-action="savePendingUpdate">${ICONS.check} 기록</button>
       </div>
-      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
-        <span class="wl-hint">${escapeHtml(workName(workId))}에 기록됨</span>
-        <button class="wl-icon-btn" data-action="toggleUpdateExtraPicker" title="다른 할일에도 기록">${ICONS.plus}</button>
-      </div>
-      ${draft.extraWorkIds.length > 0 ? `
-        <div class="wl-chip-row">
-          ${draft.extraWorkIds.map((id) => `
-            <span class="wl-chip">${escapeHtml(workName(id))}
-              <button class="wl-icon-btn" data-action="removeUpdateExtraWork" data-work="${id}">${ICONS.x}</button>
-            </span>`).join("")}
-        </div>` : ""}
-      ${updateExtraPickerOpen ? `
-        <div class="wl-field-row wl-field-row--tight">
-          <select class="wl-select" data-select="updateExtraWork">
-            <option value="">이 기록을 함께 남길 할일…</option>
-            ${state.works.filter((x) => !x.archived && x.id !== workId && !draft.extraWorkIds.includes(x.id))
-              .map((x) => `<option value="${x.id}">${escapeHtml(x.name)}</option>`).join("")}
-          </select>
-        </div>` : ""}
+      <div class="wl-hint" style="margin-top:8px">${escapeHtml(workName(workId))}${subtask ? ` · ${escapeHtml(subtask.name)}` : ""}에 기록됨</div>
+      ${draft.extraLinks.map((l, i) => renderWorkLinkRow({
+        workId: l.workId, subtaskId: l.subtaskId,
+        workSelect: "updateExtraWork", subSelect: "updateExtraSub", index: i,
+        removeAction: "removeUpdateExtraLink", placeholder: "함께 기록할 할일 선택",
+      })).join("")}
+      <button class="wl-cost-toggle" data-action="addUpdateExtraLink">${ICONS.plus} 할일 더 연결</button>
       ${subtask && !subtask.done ? `
         <div class="wl-subtask-row" style="margin-top:10px">
           <button class="wl-checkbox ${draft.subtaskDone ? "is-done" : ""}" data-action="togglePendingSubtaskDone">${draft.subtaskDone ? ICONS.check : ""}</button>
@@ -1356,15 +1339,35 @@ function renderQueueItem(item, idx) {
     <li class="wl-queue-item" data-drag-item="queue">
       <span class="wl-drag-handle" data-drag-handle="queue">${ICONS.grip}</span>
       <span class="wl-queue-index">${idx + 1}</span>
-      <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml([w.name, ...(item.extraWorkIds || []).map(workName)].join(" + "))}</span>` : ""}</span>
+      <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml([w.name, ...(item.extraLinks || []).map((l) => workName(l.workId))].join(" + "))}</span>` : ""}</span>
       <button class="wl-icon-btn" data-action="removeFromQueue" data-id="${item.id}">${ICONS.x}</button>
     </li>`;
+}
+
+// One 할일 + 하위 할일 pair. Used for the first link and every extra one, so an
+// added 할일 is chosen exactly the same way rather than as a lesser attachment.
+function renderWorkLinkRow({ workId, subtaskId, workSelect, subSelect, index, removeAction, placeholder }) {
+  const activeWorks = state.works.filter((w) => !w.archived);
+  const selected = activeWorks.find((w) => w.id === workId);
+  const idx = index != null ? ` data-index="${index}"` : "";
+  return `
+    <div class="wl-field-row wl-field-row--tight">
+      <select class="wl-select" data-select="${workSelect}"${idx}>
+        <option value="">${escapeHtml(placeholder)}</option>
+        ${activeWorks.map((w) => `<option value="${w.id}" ${workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
+      </select>
+      ${selected && selected.subtasks.length > 0 ? `
+        <select class="wl-select" data-select="${subSelect}"${idx}>
+          <option value="">하위 할일 선택 안 함</option>
+          ${selected.subtasks.map((st) => `<option value="${st.id}" ${subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
+        </select>` : ""}
+      ${removeAction ? `<button class="wl-icon-btn" data-action="${removeAction}" data-index="${index}">${ICONS.x}</button>` : ""}
+    </div>`;
 }
 
 function renderQueueSection() {
   const draft = drafts.queueDraft;
   const activeWorks = state.works.filter((w) => !w.archived);
-  const selectedWork = activeWorks.find((w) => w.id === draft.workId);
   return `
     <div class="wl-queue">
       <div class="wl-card-title">블록 추가</div>
@@ -1373,33 +1376,16 @@ function renderQueueSection() {
         <button class="wl-btn wl-btn--primary" data-action="addToQueue">${ICONS.plus} 추가</button>
       </div>
       ${activeWorks.length > 0 ? `
-        <div class="wl-field-row wl-field-row--tight">
-          <select class="wl-select" data-select="queueWork">
-            <option value="">할일 연결 안 함</option>
-            ${activeWorks.map((w) => `<option value="${w.id}" ${draft.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
-          </select>
-          ${selectedWork && selectedWork.subtasks.length > 0 ? `
-            <select class="wl-select" data-select="queueSub">
-              <option value="">하위 할일 선택 안 함</option>
-              ${selectedWork.subtasks.map((st) => `<option value="${st.id}" ${draft.subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
-            </select>` : ""}
-          ${draft.workId ? `<button class="wl-icon-btn" data-action="toggleQueueExtraPicker" title="할일 더 연결">${ICONS.plus}</button>` : ""}
-        </div>
-        ${draft.extraWorkIds.length > 0 ? `
-          <div class="wl-chip-row">
-            ${draft.extraWorkIds.map((id) => `
-              <span class="wl-chip">${escapeHtml(workName(id))}
-                <button class="wl-icon-btn" data-action="removeQueueExtraWork" data-work="${id}">${ICONS.x}</button>
-              </span>`).join("")}
-          </div>` : ""}
-        ${queueExtraPickerOpen ? `
-          <div class="wl-field-row wl-field-row--tight">
-            <select class="wl-select" data-select="queueExtraWork">
-              <option value="">이 블록에서 함께 할 할일…</option>
-              ${activeWorks.filter((w) => w.id !== draft.workId && !draft.extraWorkIds.includes(w.id))
-                .map((w) => `<option value="${w.id}">${escapeHtml(w.name)}</option>`).join("")}
-            </select>
-          </div>` : ""}` : ""}
+        ${renderWorkLinkRow({
+          workId: draft.workId, subtaskId: draft.subtaskId,
+          workSelect: "queueWork", subSelect: "queueSub", placeholder: "할일 연결 안 함",
+        })}
+        ${draft.extraLinks.map((l, i) => renderWorkLinkRow({
+          workId: l.workId, subtaskId: l.subtaskId,
+          workSelect: "queueExtraWork", subSelect: "queueExtraSub", index: i,
+          removeAction: "removeQueueExtraLink", placeholder: "함께 할 할일 선택",
+        })).join("")}
+        ${draft.workId ? `<button class="wl-cost-toggle" data-action="addQueueExtraLink">${ICONS.plus} 할일 더 연결</button>` : ""}` : ""}
       ${state.queue.length > 0 ? `
         <div class="wl-hint" style="margin-top:10px">계획된 블록 ${state.queue.length}개 · 드래그로 순서 변경</div>
         <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
@@ -2194,11 +2180,11 @@ function runAction(name, ds) {
     case "startQueue": startQueue(); break;
     case "toggleSwitchForm": toggleSwitchForm(); break;
     case "switchSessionWork": switchSessionWork(); break;
-    case "switchToLinkedWork": switchSessionWork(ds.work); break;
-    case "toggleQueueExtraPicker": toggleQueueExtraPicker(); break;
-    case "removeQueueExtraWork": removeQueueExtraWork(ds.work); break;
-    case "toggleUpdateExtraPicker": toggleUpdateExtraPicker(); break;
-    case "removeUpdateExtraWork": removeUpdateExtraWork(ds.work); break;
+    case "switchToLinkedWork": switchSessionWork(ds.index); break;
+    case "addQueueExtraLink": addQueueExtraLink(); break;
+    case "removeQueueExtraLink": removeQueueExtraLink(ds.index); break;
+    case "addUpdateExtraLink": addUpdateExtraLink(); break;
+    case "removeUpdateExtraLink": removeUpdateExtraLink(ds.index); break;
     case "toggleGoalCategory": toggleGoalCategoryExpand(ds.cat); break;
     case "addTag": addTag(); break;
     case "removeTag": removeTag(ds.tag); break;
@@ -2322,8 +2308,10 @@ async function onRootChange(e) {
     const kind = select.dataset.select;
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
-    if (kind === "queueExtraWork") { addQueueExtraWork(select.value); }
-    if (kind === "updateExtraWork") { addUpdateExtraWork(select.value); }
+    if (kind === "queueExtraWork") { const l = drafts.queueDraft.extraLinks[Number(select.dataset.index)]; if (l) { l.workId = select.value; l.subtaskId = ""; render(); } }
+    if (kind === "queueExtraSub") { const l = drafts.queueDraft.extraLinks[Number(select.dataset.index)]; if (l) l.subtaskId = select.value; }
+    if (kind === "updateExtraWork") { const l = drafts.pendingUpdate.extraLinks[Number(select.dataset.index)]; if (l) { l.workId = select.value; l.subtaskId = ""; render(); } }
+    if (kind === "updateExtraSub") { const l = drafts.pendingUpdate.extraLinks[Number(select.dataset.index)]; if (l) l.subtaskId = select.value; }
     if (kind === "switchWork") { drafts.switchDraft.workId = select.value; drafts.switchDraft.subtaskId = ""; render(); }
     if (kind === "switchSub") { drafts.switchDraft.subtaskId = select.value; }
     if (kind === "newWorkTag") { drafts.newWorkTag = select.value; }
