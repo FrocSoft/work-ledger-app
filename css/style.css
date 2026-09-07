@@ -260,9 +260,11 @@ body {
 .wl-timer.is-paused .wl-timer-clock { color: var(--wl-text-muted); opacity: .75; }
 .wl-timer.is-paused .wl-timer-bar-fill { background: var(--wl-text-muted); }
 
-.wl-spend-row { display: flex; gap: 8px; }
+/* Presets carry only a name and a price now — the rule is the same for all of
+   them and is printed once beneath the row. */
+.wl-spend-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .wl-spend-btn {
-  flex: 1;
+  flex: 1 1 90px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -277,7 +279,8 @@ body {
   font-size: 12px;
 }
 .wl-spend-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.wl-spend-cost { font-family: 'IBM Plex Mono', monospace; color: var(--wl-spend); font-size: 11.5px; }
+.wl-spend-cost { font-family: 'IBM Plex Mono', monospace; color: var(--wl-spend); font-size: 13px; }
+.wl-spend-rule { margin: 8px 0 2px; }
 
 .wl-empty { font-size: 12.5px; color: var(--wl-text-muted); padding: 4px 0; }
 .wl-empty--pad { padding: 10px 0; }
