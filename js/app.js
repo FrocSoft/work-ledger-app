@@ -226,6 +226,8 @@ let renderedDay = null;
 let resetConfirm = null;
 let switchFormOpen = false;
 let floatingTimerOn = false;
+let floatingTimerNote = "";
+let timerWindow = null;
 const BASE_TITLE = document.title;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
@@ -313,6 +315,7 @@ function onTick() {
   updateSpendTimerDisplay();
   updateTitleTimer();
   drawFloatingTimer();
+  if (timerWindow && timerWindow.closed) { timerWindow = null; floatingTimerOn = false; render(); }
   maybeNotifyTimerDone();
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
@@ -360,9 +363,9 @@ function updateTitleTimer() {
 // A floating always-on-top window, done as picture-in-picture over a canvas —
 // the one way a page can stay visible above other apps. Unsupported browsers
 // simply never see the button.
+// Every browser can show the fallback window, so the button is always offered.
 function floatingTimerSupported() {
-  const v = document.createElement("video");
-  return !!(document.pictureInPictureEnabled || typeof v.webkitSetPresentationMode === "function");
+  return true;
 }
 function drawFloatingTimer() {
   const canvas = document.getElementById("wl-pip-canvas");
@@ -388,28 +391,101 @@ function drawFloatingTimer() {
   const label = info.label.length > 18 ? `${info.label.slice(0, 17)}…` : info.label;
   ctx.fillText(label, W / 2, H / 2 + 70);
 }
-async function toggleFloatingTimer() {
+function closeFloatingTimer() {
+  const video = document.getElementById("wl-pip-video");
+  floatingTimerOn = false;
+  try {
+    if (document.pictureInPictureElement) document.exitPictureInPicture();
+    else if (video && video.webkitSetPresentationMode) video.webkitSetPresentationMode("inline");
+  } catch (e) { /* already closed */ }
+  if (timerWindow && !timerWindow.closed) timerWindow.close();
+  timerWindow = null;
+  render();
+}
+// Safari refuses picture-in-picture from a canvas stream, and it only honours
+// the request inside the click itself — so the call goes out synchronously,
+// and anything that fails falls back to a small separate window.
+function toggleFloatingTimer() {
+  if (floatingTimerOn) { closeFloatingTimer(); return; }
   const canvas = document.getElementById("wl-pip-canvas");
   const video = document.getElementById("wl-pip-video");
-  if (!canvas || !video) return;
+  floatingTimerOn = true;
+  floatingTimerNote = "";
+  drawFloatingTimer();
   try {
-    if (floatingTimerOn) {
-      floatingTimerOn = false;
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (video.webkitSetPresentationMode) video.webkitSetPresentationMode("inline");
-      render();
-      return;
-    }
-    floatingTimerOn = true;
-    drawFloatingTimer();
     if (!video.srcObject) video.srcObject = canvas.captureStream(2);
-    await video.play();
-    if (video.requestPictureInPicture) await video.requestPictureInPicture();
-    else video.webkitSetPresentationMode("picture-in-picture");
-    render();
+    const playing = video.play();
+    if (playing && playing.catch) playing.catch(() => {});
+    if (video.requestPictureInPicture) {
+      video.requestPictureInPicture().catch(() => openTimerWindow("이 브라우저는 화면 위 타이머를 지원하지 않아 창으로 띄웠어요."));
+    } else if (video.webkitSupportsPresentationMode && video.webkitSupportsPresentationMode("picture-in-picture")) {
+      video.webkitSetPresentationMode("picture-in-picture");
+      // Safari reports support but silently stays inline for canvas streams.
+      setTimeout(() => {
+        if (floatingTimerOn && video.webkitPresentationMode !== "picture-in-picture") {
+          openTimerWindow("사파리는 화면 위 타이머를 막아서 창으로 띄웠어요.");
+        }
+      }, 700);
+    } else {
+      openTimerWindow("");
+    }
   } catch (e) {
+    openTimerWindow("");
+  }
+  render();
+}
+// The fallback: a small always-available window that runs its own clock from
+// the start timestamp, so it stays right even when this tab is throttled.
+function openTimerWindow(note) {
+  floatingTimerNote = note || "";
+  if (timerWindow && !timerWindow.closed) { syncTimerWindow(); timerWindow.focus(); return; }
+  timerWindow = window.open("", "wl-timer", "width=280,height=150,menubar=no,toolbar=no,location=no,status=no");
+  if (!timerWindow) {
     floatingTimerOn = false;
+    floatingTimerNote = "팝업이 차단됐어요. 브라우저에서 이 사이트의 팝업을 허용해주세요.";
     render();
+    return;
+  }
+  timerWindow.document.write(`<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>타이머</title><style>
+    html,body{margin:0;height:100%;background:#1B1917;color:#E8E1D3;
+      font-family:-apple-system,system-ui,sans-serif;display:flex;flex-direction:column;
+      align-items:center;justify-content:center;gap:6px;-webkit-user-select:none;user-select:none}
+    #c{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:44px;font-weight:600;line-height:1}
+    #l{font-size:13px;color:#BDB4A2;max-width:90%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  </style></head><body><div id="c">--:--</div><div id="l"></div><script>
+    function pad(n){return String(n).padStart(2,"0")}
+    setInterval(function(){
+      var t=window.wlTimer, c=document.getElementById("c"), l=document.getElementById("l");
+      if(!t){c.textContent="--:--";c.style.color="#8C8474";l.textContent="진행 중인 블록 없음";return}
+      var s=Math.max(0,Math.round((Date.now()-t.startedAt)/1000));
+      c.textContent=pad(Math.floor(s/60))+":"+pad(s%60);
+      c.style.color=(t.overAt&&Date.now()>t.overAt)?"#C0684A":t.accent;
+      l.textContent=t.label;
+      document.title=c.textContent+" · "+t.label;
+    },500);
+  <\/script></body></html>`);
+  timerWindow.document.close();
+  syncTimerWindow();
+}
+// Hands the child window the raw start time so it ticks on its own.
+function syncTimerWindow() {
+  if (!timerWindow || timerWindow.closed) return;
+  const b = state.activeBlock;
+  const s = state.activeSpend;
+  if (b) {
+    const isBreak = b.phase === "break";
+    timerWindow.wlTimer = {
+      startedAt: b.startedAt, label: isBreak ? "휴식" : b.task,
+      accent: isBreak ? "#C9A227" : "#8FA876",
+      overAt: b.startedAt + (isBreak ? BREAK_MIN : WORK_MIN) * 60000,
+    };
+  } else if (s) {
+    timerWindow.wlTimer = {
+      startedAt: s.startedAt, label: s.label, accent: "#C0684A",
+      overAt: s.startedAt + SPEND_INCLUDED_MIN * 60000,
+    };
+  } else {
+    timerWindow.wlTimer = null;
   }
 }
 
@@ -2098,6 +2174,7 @@ function renderShell() {
         </nav>
       </header>
       <div id="wl-save-status" class="wl-savebar"></div>
+      ${floatingTimerNote ? `<div class="wl-savebar wl-savebar--error">${escapeHtml(floatingTimerNote)}</div>` : ""}
       ${currentTab === "dashboard" ? renderDashboard() : currentTab === "works-manage" ? renderWorksManage() : renderGoalsManage()}
     </div>`;
 }
@@ -2211,6 +2288,7 @@ function render() {
   else if (state) html = renderShell();
   root.innerHTML = html;
   renderedDay = todayKey();
+  if (state) syncTimerWindow();
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   if (prevScrollLeft) {
