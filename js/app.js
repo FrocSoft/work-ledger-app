@@ -16,6 +16,9 @@ const DEFAULT_SPEND_PRESETS = [
   { label: "웹서핑", cost: 3 },
 ];
 
+// 전속계약 5:5가 원칙이라 전역 기본값 하나로 둡니다. 갤러리 수수료만이 아니라
+// 세금·수수료처럼 위에서 떼이는 것 전부를 흡수하는 "실수령률"입니다.
+const DEFAULT_PAYOUT_RATE = 50;
 const DEFAULT_TAGS = [
   { name: "제작", points: 3 },
   { name: "개발", points: 2 },
@@ -186,6 +189,7 @@ function defaultState() {
     activeBlock: null,
     activeSpend: null,
     cancelledBlock: null,
+    payoutRate: DEFAULT_PAYOUT_RATE,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
     spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
@@ -227,6 +231,7 @@ function normalizeState(s) {
     s.works.forEach((w) => { w.wip = recent.includes(w.id); });
   }
   s.works.forEach((w) => { w.wip = w.wip === true; });
+  if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
   return s;
 }
 
@@ -285,6 +290,8 @@ const drafts = {
   queueDraft: { task: "", workId: "", subtaskId: "", extraLinks: [] },
   switchDraft: { task: "", workId: "", subtaskId: "" },
   manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
+  saleAmount: {},
+  payoutRate: null,
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -2233,6 +2240,24 @@ function renderTierRow(t, totalRevenue, showActions, catId) {
     </li>`;
 }
 
+// 물건값이 한 해 실수령의 몇 %인지. 통념상 사치품은 5~10% 선을 넘지 않게
+// 잡습니다. 다만 차처럼 필수재는 이 기준이 적용되지 않으므로 색으로 판정하지
+// 않고 숫자만 보여줍니다 — 무엇이 사치인지는 사람이 정할 일입니다.
+function renderLuxuryRatio(t) {
+  const yearly = revenueLast12Months();
+  if (yearly <= 0) {
+    return `<div class="wl-hint">최근 12개월 실수령이 기록되면 연 수입 대비 비율을 계산해요</div>`;
+  }
+  const pct = (t.actualPrice / yearly) * 100;
+  return `<div class="wl-hint">최근 12개월 실수령 ${formatMoney(yearly)}의 <b>${pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10}%</b> · 사치품 통념 5~10%</div>`;
+}
+function formatMoney(n) {
+  const won = Math.round(n);
+  if (won >= 100000000) return `${(won / 100000000).toFixed(won % 100000000 === 0 ? 0 : 1)}억원`;
+  if (won >= 10000) return `${Math.round(won / 10000).toLocaleString()}만원`;
+  return `${won.toLocaleString()}원`;
+}
+
 function renderGoalTierPreview(t, totalRevenue) {
   const unlocked = totalRevenue >= t.targetAmount;
   const pct = unlocked ? 100 : Math.min(100, Math.round((totalRevenue / t.targetAmount) * 100));
@@ -2246,6 +2271,7 @@ function renderGoalTierPreview(t, totalRevenue) {
           <span class="wl-progress-label">${pct}%</span>
         </div>
         <div class="wl-hint">제품가 ${t.actualPrice.toLocaleString()}원 · 목표 ${t.targetAmount.toLocaleString()}원</div>
+        ${renderLuxuryRatio(t)}
       </div>
     </div>`;
 }
@@ -2315,6 +2341,100 @@ function renderDashboard() {
 
 // Money lives in 할일 관리, not on the dashboard: costs are entered and read
 // back here, item by item, against the project's expected sale price.
+// 완성한 뒤에야 팔렸는지 따질 수 있으므로 두 상태를 나눠 둡니다.
+// 완성했지만 아직 안 팔린 것들의 예상 실수령 합계가 곧 파이프라인입니다.
+function renderSaleRow(w) {
+  const draft = drafts.saleAmount[w.id];
+  if (w.sale) {
+    return `
+      <div class="wl-sale is-sold">
+        <span>판매됨 · 실수령 <b>${w.sale.amount.toLocaleString()}원</b>
+          <span class="wl-hint">${escapeHtml(formatKDate(new Date(w.sale.at)))}</span></span>
+        <button class="wl-btn wl-btn--quiet" data-action="unmarkSold" data-work="${w.id}">판매 취소</button>
+      </div>`;
+  }
+  if (!w.completed) {
+    return `
+      <div class="wl-sale">
+        <span class="wl-hint">아직 작업 중이에요.</span>
+        <button class="wl-btn wl-btn--ghost" data-action="markCompleted" data-work="${w.id}">${ICONS.check} 완성</button>
+      </div>`;
+  }
+  return `
+    <div class="wl-sale">
+      <span class="wl-hint">완성 · 판매 대기</span>
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--num" placeholder="실수령액" inputmode="numeric"
+               data-draft="saleAmount" data-work="${w.id}" data-enter-action="markSold"
+               value="${escapeAttr(draft != null ? draft : String(netOf(w.expectedSalePrice)))}" />
+        <button class="wl-btn wl-btn--primary" data-action="markSold" data-work="${w.id}">판매됨</button>
+        <button class="wl-btn wl-btn--quiet" data-action="unmarkCompleted" data-work="${w.id}">완성 취소</button>
+      </div>
+    </div>`;
+}
+function savePayoutRate() {
+  const v = Number(drafts.payoutRate);
+  if (!Number.isFinite(v) || v <= 0 || v > 100) return;
+  state.payoutRate = v;
+  drafts.payoutRate = null;
+  persistAndRender();
+}
+function markCompleted(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.completed = Date.now();
+  persistAndRender();
+}
+function unmarkCompleted(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w) return;
+  w.completed = null;
+  persistAndRender();
+}
+// 판매를 기록하면 그 금액이 그대로 누적 수익 항목이 됩니다 — 목표 진행률은
+// 실수령 기준이므로, 판매가가 아니라 손에 들어온 금액이 올라갑니다.
+function markSold(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w || w.sale) return;
+  const raw = drafts.saleAmount[workId];
+  const amount = Math.round(Number(raw != null ? raw : netOf(w.expectedSalePrice)));
+  if (!Number.isFinite(amount) || amount <= 0) return;
+  const entry = { id: uid(), amount, date: todayKey(), workId: w.id };
+  state.revenueLog.unshift(entry);
+  w.sale = { amount, at: Date.now(), revenueId: entry.id };
+  if (!w.completed) w.completed = Date.now();
+  delete drafts.saleAmount[workId];
+  persistAndRender();
+}
+function unmarkSold(workId) {
+  const w = state.works.find((x) => x.id === workId);
+  if (!w || !w.sale) return;
+  if (!window.confirm(`"${w.name}" 판매 기록을 취소할까요?\n누적 수익에서 ${w.sale.amount.toLocaleString()}원이 빠집니다.`)) return;
+  state.revenueLog = state.revenueLog.filter((r) => r.id !== w.sale.revenueId);
+  w.sale = null;
+  persistAndRender();
+}
+
+// 판매가에서 실제로 손에 들어오는 금액.
+function netOf(amount) {
+  return Math.round(amount * (state.payoutRate / 100));
+}
+// 판매 가능한 작품인지 — 판매예상을 적어둔 것만 판매 대상으로 봅니다.
+// 모든 프로젝트가 파는 물건은 아니라서, 없으면 판매 관련 표시를 아예 안 합니다.
+function isSellable(w) {
+  return w.expectedSalePrice != null;
+}
+// 최근 12개월 실수령 합계. 월급이 없으면 달력 연도는 1월마다 무너지므로
+// 굴러가는 12개월 창으로 봅니다.
+function revenueLast12Months() {
+  const from = new Date();
+  from.setFullYear(from.getFullYear() - 1);
+  const fromKey = todayKey(from);
+  return state.revenueLog
+    .filter((r) => r.date >= fromKey)
+    .reduce((a, r) => a + r.amount, 0);
+}
+
 function renderCostSection(w) {
   const costs = [...(w.costs || [])].sort((a, b) => b.at - a.at);
   const costDraft = drafts.newCost[w.id] || {};
@@ -2325,9 +2445,15 @@ function renderCostSection(w) {
     <div class="wl-card-title" style="margin-top:14px">비용</div>
     <div class="wl-project-money">
       <span>쓴 비용 <b>${total.toLocaleString()}원</b></span>
-      <span>판매예상 <b>${expected != null ? `${expected.toLocaleString()}원` : "미설정"}</b></span>
-      ${expected != null ? `<span>남는 돈 <b>${(expected - total).toLocaleString()}원</b></span>` : ""}
+      ${expected != null ? `
+        <span>판매예상 <b>${expected.toLocaleString()}원</b></span>
+        <span>예상 실수령 <b>${netOf(expected).toLocaleString()}원</b></span>
+        <span>남는 돈 <b>${(netOf(expected) - total).toLocaleString()}원</b></span>
+      ` : `<span>판매예상 <b>미설정</b></span>`}
     </div>
+    ${expected != null && netOf(expected) > 0 ? `
+      <div class="wl-hint">재료비가 실수령의 ${Math.round((total / netOf(expected)) * 1000) / 10}% · 실수령률 ${state.payoutRate}% 적용</div>` : ""}
+    ${isSellable(w) ? renderSaleRow(w) : ""}
     ${costs.length > 0 ? `
       <ul class="wl-cost-list">
         ${costs.map((c) => `
@@ -2558,6 +2684,15 @@ function renderGoalsManage() {
   return `
     <div class="wl-body">
       <section class="wl-card">
+        <div class="wl-card-title">실수령률</div>
+        <div class="wl-field-row wl-field-row--tight">
+          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="payoutRate" data-enter-action="savePayoutRate" value="${escapeAttr(drafts.payoutRate != null ? drafts.payoutRate : String(state.payoutRate))}" />
+          <span class="wl-hint" style="flex:1">% — 판매가에서 실제로 손에 들어오는 비율 (전속 5:5면 50)</span>
+          <button class="wl-btn wl-btn--ghost" data-action="savePayoutRate">${ICONS.check}</button>
+        </div>
+        <div class="wl-hint">판매예상 100만원이면 실수령 ${netOf(1000000).toLocaleString()}원으로 계산합니다. 세금·수수료까지 위에서 떼이는 걸 모두 포함한 비율로 잡으세요.</div>
+      </section>
+      <section class="wl-card">
         <div class="wl-field-row">
           <input class="wl-input" placeholder="새 카테고리 (예: 시계)" data-draft="newCategoryName" data-enter-action="addCategory" value="${escapeAttr(drafts.newCategoryName)}" />
           <button class="wl-btn wl-btn--primary" data-action="addCategory">${ICONS.plus} 추가</button>
@@ -2760,6 +2895,11 @@ function runAction(name, ds) {
     case "toggleAllWorkCollapse": toggleAllWorkCollapse(); break;
     case "archiveWork": archiveWork(ds.work); break;
     case "toggleWorkWip": toggleWorkWip(ds.work); break;
+    case "savePayoutRate": savePayoutRate(); break;
+    case "markCompleted": markCompleted(ds.work); break;
+    case "unmarkCompleted": unmarkCompleted(ds.work); break;
+    case "markSold": markSold(ds.work); break;
+    case "unmarkSold": unmarkSold(ds.work); break;
     case "unarchiveWork": unarchiveWork(ds.work); break;
     case "toggleArchiveSection": toggleArchiveSection(); break;
     case "addSubtask": addSubtask(ds.work); break;
@@ -2859,6 +2999,8 @@ function onRootInput(e) {
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "pendingUpdateCostLabel": drafts.pendingUpdate.costLabel = value; break;
     case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;
+    case "saleAmount": drafts.saleAmount[el.dataset.work] = clampNumeric(); break;
+    case "payoutRate": drafts.payoutRate = clampNumeric(); break;
     case "manualTask": drafts.manualBlock.task = value; updateManualPreview(); break;
     case "manualDate": drafts.manualBlock.date = value; updateManualPreview(); break;
     case "manualTime": drafts.manualBlock.time = value; updateManualPreview(); break;

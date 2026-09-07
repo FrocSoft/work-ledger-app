@@ -560,3 +560,10 @@ body {
   .wl-checkbox { width: 24px; height: 24px; }
   .wl-tab { padding: 12px 8px; font-size: 14.5px; }
 }
+
+/* 완성 / 판매 상태 — 판매예상을 적어둔 작품에만 나옵니다. */
+.wl-sale { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--wl-border); font-size: 12.5px; }
+.wl-sale > span:first-child { flex: 1; min-width: 0; }
+.wl-sale .wl-field-row { margin: 0; flex: 1 1 220px; }
+.wl-sale.is-sold { color: var(--wl-sales, var(--wl-work)); }
