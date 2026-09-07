@@ -1934,9 +1934,11 @@ function renderSpendPresetButtons() {
       ${state.spendPresets.map((p) => `
         <button class="wl-spend-btn" data-action="spendPreset" data-cost="${p.cost}" data-label="${escapeAttr(p.label)}">
           <span>${escapeHtml(p.label)}</span>
-          <span class="wl-spend-cost">${p.cost}점 = 1시간 · 이후 10분당 1점</span>
+          <span class="wl-spend-cost">${p.cost}점</span>
         </button>`).join("")}
     </div>
+    <!-- 규칙은 모든 항목이 같으므로 버튼마다 반복하지 않고 여기 한 번만 적습니다. -->
+    <div class="wl-hint wl-spend-rule">눌러 둔 점수로 ${SPEND_INCLUDED_MIN / 60}시간, 이후 ${SPEND_MIN_PER_POINT}분마다 1점씩 더</div>
     <div class="wl-field-row wl-field-row--tight">
       <input class="wl-input wl-input--sm" placeholder="다른 것" data-draft="newPresetLabel" value="${escapeAttr(drafts.newPresetLabel)}" />
       <input class="wl-input wl-input--num" placeholder="점" inputmode="numeric" data-draft="newPresetCost" data-enter-action="addSpendPreset" value="${escapeAttr(drafts.newPresetCost)}" />
