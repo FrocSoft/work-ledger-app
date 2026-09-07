@@ -152,6 +152,7 @@ function defaultState() {
     blocksByDate: {},
     spendsByDate: {},
     borrowedByDate: {},
+    collapsedWorks: {},
     savings: 0,
     processedDates: [],
     offDayLog: [],
@@ -189,6 +190,7 @@ function normalizeState(s) {
   }));
   s.queue = s.queue || [];
   s.borrowedByDate = s.borrowedByDate || {};
+  s.collapsedWorks = s.collapsedWorks || {};
   return s;
 }
 
@@ -211,7 +213,6 @@ let editingWorkDraft = { name: "", expectedSalePrice: "", tagId: "" };
 let dragSource = null;
 let costFormOpen = {};
 let expandedGoalCats = {};
-let collapsedWorks = {};
 let archivedSectionOpen = false;
 let editingTagId = null;
 let editingTagDraft = { name: "", points: "" };
@@ -739,8 +740,18 @@ function startEditWork(workId) {
 }
 function cancelEditWork() { editingWorkId = null; render(); }
 function toggleWorkCollapse(workId) {
-  collapsedWorks[workId] = !collapsedWorks[workId];
-  render();
+  state.collapsedWorks[workId] = !state.collapsedWorks[workId];
+  persistAndRender();
+}
+// Collapses everything while anything is still open, and only expands once
+// the whole list is closed — so one button is never ambiguous.
+function anyWorkExpanded() {
+  return state.works.some((w) => !w.archived && !state.collapsedWorks[w.id]);
+}
+function toggleAllWorkCollapse() {
+  const collapse = anyWorkExpanded();
+  state.works.forEach((w) => { if (!w.archived) state.collapsedWorks[w.id] = collapse; });
+  persistAndRender();
 }
 function archiveWork(workId) {
   const w = state.works.find((x) => x.id === workId);
@@ -1747,7 +1758,7 @@ function renderWorkManageCard(w) {
   const total = w.subtasks.length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const isEditing = editingWorkId === w.id;
-  const collapsed = !!collapsedWorks[w.id];
+  const collapsed = !!state.collapsedWorks[w.id];
   const stats = workSessionStats(w.id);
   return `
     <section class="wl-card" data-drag-item="work" data-work="${w.id}">
@@ -1865,7 +1876,13 @@ function renderWorksManage() {
           <button class="wl-btn wl-btn--primary" data-action="addWork">${ICONS.plus} 추가</button>
         </div>
       </section>
-      ${active.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : ""}
+      ${active.length === 0 ? `<div class="wl-empty wl-empty--pad">등록된 할일이 없어요. 위에서 하나 추가해보세요.</div>` : `
+        <div class="wl-work-head wl-col-head">
+          <span class="wl-hint">할일 ${active.length}개</span>
+          <button class="wl-cost-toggle" data-action="toggleAllWorkCollapse">
+            ${anyWorkExpanded() ? "모두 접기" : "모두 펴기"}
+          </button>
+        </div>`}
       ${active.map(renderWorkManageCard).join("")}
       ${archived.length > 0 ? renderArchivedWorksSection(archived) : ""}
       ${renderTagManageSection()}
@@ -2131,6 +2148,7 @@ function runAction(name, ds) {
     case "saveEditWork": saveEditWork(); break;
     case "cancelEditWork": cancelEditWork(); break;
     case "toggleWorkCollapse": toggleWorkCollapse(ds.work); break;
+    case "toggleAllWorkCollapse": toggleAllWorkCollapse(); break;
     case "archiveWork": archiveWork(ds.work); break;
     case "unarchiveWork": unarchiveWork(ds.work); break;
     case "toggleArchiveSection": toggleArchiveSection(); break;
