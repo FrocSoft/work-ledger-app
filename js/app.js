@@ -22,6 +22,9 @@ const DEFAULT_PAYOUT_RATE = 50;
 // 물건값이 수입의 몇 %여야 살 만한가. 보수적으로 5%가 기본값이고, 목표 금액은
 // 여기서 자동으로 나옵니다 — 실제 가격만 넣으면 얼마를 벌어야 하는지가 정해집니다.
 const DEFAULT_GOAL_RATE = 5;
+// 목표를 "돈"이 아니라 "작품 몇 개"로 환산하기 위한 기준가(판매가). 4억은 그냥
+// 큰 숫자지만 200개는 현실성이 바로 보입니다.
+const DEFAULT_AVG_WORK_PRICE = 4000000;
 const DEFAULT_TAGS = [
   { name: "제작", points: 3 },
   { name: "개발", points: 2 },
@@ -194,6 +197,7 @@ function defaultState() {
     cancelledBlock: null,
     payoutRate: DEFAULT_PAYOUT_RATE,
     goalRate: DEFAULT_GOAL_RATE,
+    avgWorkPrice: DEFAULT_AVG_WORK_PRICE,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
     spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
@@ -237,8 +241,16 @@ function normalizeState(s) {
   s.works.forEach((w) => { w.wip = w.wip === true; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
   if (typeof s.goalRate !== "number" || !(s.goalRate > 0)) s.goalRate = DEFAULT_GOAL_RATE;
+  if (typeof s.avgWorkPrice !== "number" || !(s.avgWorkPrice > 0)) s.avgWorkPrice = DEFAULT_AVG_WORK_PRICE;
   // 목표 금액은 실제 가격에서 파생되는 값이라 저장본과 어긋날 수 없게 매번 맞춥니다.
-  s.categories.forEach((c) => c.tiers.forEach((t) => { t.targetAmount = goalTargetFor(t.actualPrice, s.goalRate); }));
+  // 필수재는 비율을 적용하지 않습니다 — 차값의 20배를 벌어야 한다는 건 말이 안 되고,
+  // 필요한 건 "언제까지 그 돈이 있어야 하는가"뿐입니다.
+  s.categories.forEach((c) => {
+    c.kind = c.kind === "essential" ? "essential" : "luxury";
+    c.tiers.forEach((t) => {
+      t.targetAmount = c.kind === "essential" ? t.actualPrice : goalTargetFor(t.actualPrice, s.goalRate);
+    });
+  });
   return s;
 }
 
@@ -300,6 +312,7 @@ const drafts = {
   saleAmount: {},
   payoutRate: null,
   goalRate: null,
+  avgWorkPrice: null,
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -1463,21 +1476,22 @@ function addTier(catId) {
   const draft = drafts.newTier[catId] || {};
   const actualPrice = Number(draft.actualPrice);
   if (!draft.label || !draft.label.trim() || !actualPrice || actualPrice <= 0) return;
-  const targetAmount = goalTargetFor(actualPrice);
   const c = state.categories.find((x) => x.id === catId);
   if (!c) return;
+  const targetAmount = c.kind === "essential" ? actualPrice : goalTargetFor(actualPrice);
   if (draft.editingId) {
     const t = c.tiers.find((x) => x.id === draft.editingId);
     if (t) {
       t.label = draft.label.trim();
       t.targetAmount = targetAmount;
       t.actualPrice = actualPrice;
+      t.dueDate = draft.dueDate || null;
       t.image = draft.image || null;
     }
   } else {
-    c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
+    c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, dueDate: draft.dueDate || null, image: draft.image || null });
   }
-  drafts.newTier[catId] = { label: "", actualPrice: "", image: null };
+  drafts.newTier[catId] = { label: "", actualPrice: "", dueDate: "", image: null };
   persistAndRender();
 }
 function startEditTier(catId, tierId) {
@@ -1486,12 +1500,12 @@ function startEditTier(catId, tierId) {
   if (!t) return;
   drafts.newTier[catId] = {
     label: t.label, actualPrice: String(t.actualPrice),
-    image: t.image || null, editingId: t.id,
+    dueDate: t.dueDate || "", image: t.image || null, editingId: t.id,
   };
   render();
 }
 function cancelEditTier(catId) {
-  drafts.newTier[catId] = { label: "", actualPrice: "", image: null };
+  drafts.newTier[catId] = { label: "", actualPrice: "", dueDate: "", image: null };
   render();
 }
 function removeTier(catId, tierId) {
@@ -2267,7 +2281,46 @@ function formatMoney(n) {
   return `${won.toLocaleString()}원`;
 }
 
-function renderGoalTierPreview(t, totalRevenue) {
+function monthsBetween(fromKey, toKey) {
+  const [fy, fm, fd] = fromKey.split("-").map(Number);
+  const [ty, tm, td] = toKey.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm) + (td - fd) / 30;
+}
+// 목표 금액을 작품 개수로 환산합니다. 판매가가 아니라 실수령으로 나눠야
+// 정직합니다 — 400만원 작품 하나가 목표를 채우는 건 200만원어치니까요.
+function worksNeeded(amount) {
+  const perWork = netOf(state.avgWorkPrice);
+  if (perWork <= 0 || amount <= 0) return 0;
+  return Math.ceil(amount / perWork);
+}
+function worksNeededText(amount) {
+  const n = worksNeeded(amount);
+  if (n <= 0) return "";
+  return `앞으로 <b>${n.toLocaleString()}개</b> 더 만들면 도달 · ${formatMoney(state.avgWorkPrice)}짜리 기준`;
+}
+// 필수재는 "얼마를 벌면 살 자격이 되는가"가 아니라 "언제까지 있어야 하는가"라서
+// 진행률 바 대신 기한과 그때까지 필요한 월 수입을 보여줍니다.
+function renderEssentialTier(t) {
+  const need = t.actualPrice;
+  const months = t.dueDate ? Math.max(0, Math.round(monthsBetween(todayKey(), t.dueDate))) : null;
+  const overdue = t.dueDate && monthsBetween(todayKey(), t.dueDate) <= 0;
+  return `
+    <div class="wl-goal-next">
+      ${t.image ? `<img src="${t.image}" class="wl-goal-next-img wl-lightbox-trigger" alt="${escapeAttr(t.label)}" />` : `<div class="wl-goal-next-img wl-goal-next-img--empty">${ICONS.sparkles}</div>`}
+      <div class="wl-goal-next-body">
+        <div class="wl-goal-next-label">${escapeHtml(t.label)}<span class="wl-goal-next-badge is-essential">필수</span></div>
+        <div class="wl-hint">필요한 돈 ${t.actualPrice.toLocaleString()}원</div>
+        ${t.dueDate ? `
+          <div class="wl-hint ${overdue ? "wl-tier-pace is-behind" : ""}">${overdue
+            ? `${t.dueDate.replace(/-/g, ".")} 기한 지남`
+            : `${t.dueDate.replace(/-/g, ".")}까지 ${months > 0 ? `${months}개월` : "한 달 미만"} · 월 <b>${formatMoney(months > 0 ? need / months : need)}</b> 실수령 필요`}</div>`
+          : `<div class="wl-hint">기한을 넣으면 월 얼마가 필요한지 계산해요</div>`}
+        <div class="wl-hint">${worksNeededText(need)}</div>
+      </div>
+    </div>`;
+}
+function renderGoalTierPreview(t, totalRevenue, cat) {
+  if (cat && cat.kind === "essential") return renderEssentialTier(t);
   const unlocked = totalRevenue >= t.targetAmount;
   const pct = unlocked ? 100 : Math.min(100, Math.round((totalRevenue / t.targetAmount) * 100));
   return `
@@ -2280,26 +2333,30 @@ function renderGoalTierPreview(t, totalRevenue) {
           <span class="wl-progress-label">${pct}%</span>
         </div>
         <div class="wl-hint">제품가 ${t.actualPrice.toLocaleString()}원 · 목표 ${t.targetAmount.toLocaleString()}원</div>
+        ${unlocked ? "" : `<div class="wl-hint">${worksNeededText(t.targetAmount - totalRevenue)}</div>`}
         ${renderLuxuryRatio(t)}
       </div>
     </div>`;
 }
 
 function renderCategoryGoalCard(c, totalRevenue) {
-  const tiers = c.tiers.slice().sort((a, b) => a.targetAmount - b.targetAmount);
-  const nextTier = tiers.find((t) => t.targetAmount > totalRevenue);
+  const essential = c.kind === "essential";
+  const tiers = c.tiers.slice().sort((a, b) => essential
+    ? String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999"))
+    : a.targetAmount - b.targetAmount);
+  const nextTier = essential ? tiers[0] : tiers.find((t) => t.targetAmount > totalRevenue);
   const expanded = !!expandedGoalCats[c.id];
   return `
     <section class="wl-card wl-goal-cat-card">
       <button class="wl-goal-cat-toggle" data-action="toggleGoalCategory" data-cat="${c.id}">
-        <span class="wl-goal-cat-name">${escapeHtml(c.name)}</span>
+        <span class="wl-goal-cat-name">${escapeHtml(c.name)}${c.kind === "essential" ? `<span class="wl-goal-next-badge is-essential">필수</span>` : ""}</span>
         <span class="wl-goal-cat-toggle-icon ${expanded ? "is-expanded" : ""}">${ICONS.chevron}</span>
       </button>
       ${expanded
         ? (tiers.length > 0
-            ? `<div class="wl-goal-tier-list">${tiers.map((t) => renderGoalTierPreview(t, totalRevenue)).join("")}</div>`
+            ? `<div class="wl-goal-tier-list">${tiers.map((t) => renderGoalTierPreview(t, totalRevenue, c)).join("")}</div>`
             : `<div class="wl-empty" style="margin-top:10px">등록된 가격대가 없어요.</div>`)
-        : (nextTier ? renderGoalTierPreview(nextTier, totalRevenue) : `<div class="wl-empty" style="margin-top:10px">이 카테고리 목표를 모두 달성했어요.</div>`)}
+        : (nextTier ? renderGoalTierPreview(nextTier, totalRevenue, c) : `<div class="wl-empty" style="margin-top:10px">이 카테고리 목표를 모두 달성했어요.</div>`)}
     </section>`;
 }
 
@@ -2397,6 +2454,23 @@ function saveGoalRate() {
   drafts.goalRate = null;
   persistAndRender();
 }
+function saveAvgWorkPrice() {
+  const v = Number(drafts.avgWorkPrice);
+  if (!Number.isFinite(v) || v <= 0) return;
+  state.avgWorkPrice = v;
+  drafts.avgWorkPrice = null;
+  persistAndRender();
+}
+// 필수재로 바꾸면 비율로 부풀린 목표 금액을 실제 가격으로 되돌립니다.
+function toggleCategoryKind(catId) {
+  const c = state.categories.find((x) => x.id === catId);
+  if (!c) return;
+  c.kind = c.kind === "essential" ? "luxury" : "essential";
+  c.tiers.forEach((t) => {
+    t.targetAmount = c.kind === "essential" ? t.actualPrice : goalTargetFor(t.actualPrice);
+  });
+  persistAndRender();
+}
 function markCompleted(workId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
@@ -2454,17 +2528,24 @@ function revenueLast12Months() {
 }
 
 // 살 만해지는 수입 = 물건값 ÷ 비율. 5%면 물건값의 20배를 벌어야 합니다.
-function goalPreviewText(actualPrice) {
+function goalPreviewText(actualPrice, cat) {
   const price = Number(actualPrice);
-  if (!price || price <= 0) return `실제 가격을 넣으면 목표 금액이 자동으로 정해져요 (수입의 ${state.goalRate}%).`;
-  return `실제 가격 ${formatMoney(price)} → 누적 수입 <b>${formatMoney(goalTargetFor(price))}</b>을 벌면 살 만해요 (수입의 ${state.goalRate}%).`;
+  const essential = cat && cat.kind === "essential";
+  if (!price || price <= 0) {
+    return essential
+      ? "필요한 돈과 기한을 넣으면 월 얼마가 필요한지 계산해요."
+      : `실제 가격을 넣으면 목표 금액이 자동으로 정해져요 (수입의 ${state.goalRate}%).`;
+  }
+  if (essential) return `${formatMoney(price)} · ${worksNeededText(price)}`;
+  return `실제 가격 ${formatMoney(price)} → 누적 수입 <b>${formatMoney(goalTargetFor(price))}</b>을 벌면 살 만해요 · ${worksNeededText(goalTargetFor(price))}`;
+}
+function updateGoalPreviewFor(catId) {
+  const cat = state.categories.find((c) => c.id === catId);
+  const el = document.querySelector(`[data-goal-preview="${catId}"]`);
+  if (el) el.innerHTML = goalPreviewText((drafts.newTier[catId] || {}).actualPrice, cat);
 }
 // 입력 중에는 다시 그리지 않고 이 줄만 바꿉니다 — render()는 innerHTML을
 // 통째로 갈아끼워서 타이핑 중이면 커서가 날아갑니다.
-function updateGoalPreview(catId) {
-  const el = document.querySelector(`[data-goal-preview="${catId}"]`);
-  if (el) el.innerHTML = goalPreviewText((drafts.newTier[catId] || {}).actualPrice);
-}
 function goalTargetFor(actualPrice, rate) {
   const r = (rate != null ? rate : state.goalRate) / 100;
   return Math.round((Number(actualPrice) || 0) / r);
@@ -2698,6 +2779,8 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
             <div class="wl-work-name">${escapeHtml(c.name)}</div>
           </div>
           <div>
+            <button class="wl-wip-toggle ${c.kind === "essential" ? "is-on" : ""}" data-action="toggleCategoryKind" data-cat="${c.id}"
+                    title="${c.kind === "essential" ? "사치품으로 바꾸기" : "필수재로 바꾸기"}">${c.kind === "essential" ? "필수재" : "사치품"}</button>
             <button class="wl-icon-btn" data-action="editCategory" data-cat="${c.id}">${ICONS.pencil}</button>
             <button class="wl-icon-btn" data-action="removeCategory" data-cat="${c.id}">${ICONS.trash}</button>
           </div>`}
@@ -2706,11 +2789,12 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="가격대 이름" data-draft="tierLabel" data-cat="${c.id}" value="${escapeAttr(draft.label || "")}" />
         <input class="wl-input wl-input--num" placeholder="실제 가격" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
+        ${c.kind === "essential" ? `<input class="wl-input wl-input--sm" type="date" title="언제까지 필요한가" data-draft="tierDueDate" data-cat="${c.id}" value="${escapeAttr(draft.dueDate || "")}" />` : ""}
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${draft.editingId ? ICONS.check : ICONS.plus} ${draft.editingId ? "저장" : ""}</button>
         ${draft.editingId ? `<button class="wl-btn wl-btn--ghost" data-action="cancelEditTier" data-cat="${c.id}">${ICONS.x}</button>` : ""}
       </div>
-      <div class="wl-hint" data-goal-preview="${c.id}">${goalPreviewText(draft.actualPrice)}</div>
+      <div class="wl-hint" data-goal-preview="${c.id}">${goalPreviewText(draft.actualPrice, c)}</div>
     </section>`;
 }
 
@@ -2734,7 +2818,13 @@ function renderGoalsManage() {
           <span class="wl-hint" style="flex:1">% — 물건값이 수입의 이 비율이 되면 살 만하다고 봅니다</span>
           <button class="wl-btn wl-btn--ghost" data-action="saveGoalRate">${ICONS.check}</button>
         </div>
-        <div class="wl-hint">낮출수록 보수적이에요. ${state.goalRate}%면 ${formatMoney(1000000)}짜리를 사려면 누적 ${formatMoney(goalTargetFor(1000000))}을 벌어야 합니다.</div>
+        <div class="wl-field-row wl-field-row--tight" style="margin-top:10px">
+          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="avgWorkPrice" data-enter-action="saveAvgWorkPrice" value="${escapeAttr(drafts.avgWorkPrice != null ? drafts.avgWorkPrice : String(state.avgWorkPrice))}" />
+          <span class="wl-hint" style="flex:1">원 — 평소 만드는 작품 한 점의 판매가</span>
+          <button class="wl-btn wl-btn--ghost" data-action="saveAvgWorkPrice">${ICONS.check}</button>
+        </div>
+        <div class="wl-hint">작품 한 점의 실수령은 ${formatMoney(netOf(state.avgWorkPrice))}이라, 목표가 몇 점어치인지로 환산합니다.</div>
+        <div class="wl-hint" style="margin-top:8px">낮출수록 보수적이에요. ${state.goalRate}%면 ${formatMoney(1000000)}짜리를 사려면 누적 ${formatMoney(goalTargetFor(1000000))}을 벌어야 합니다.</div>
       </section>
       <section class="wl-card">
         <div class="wl-field-row">
@@ -2941,6 +3031,8 @@ function runAction(name, ds) {
     case "toggleWorkWip": toggleWorkWip(ds.work); break;
     case "savePayoutRate": savePayoutRate(); break;
     case "saveGoalRate": saveGoalRate(); break;
+    case "saveAvgWorkPrice": saveAvgWorkPrice(); break;
+    case "toggleCategoryKind": toggleCategoryKind(ds.cat); break;
     case "markCompleted": markCompleted(ds.work); break;
     case "unmarkCompleted": unmarkCompleted(ds.work); break;
     case "markSold": markSold(ds.work); break;
@@ -3047,6 +3139,7 @@ function onRootInput(e) {
     case "saleAmount": drafts.saleAmount[el.dataset.work] = clampNumeric(); break;
     case "payoutRate": drafts.payoutRate = clampNumeric(); break;
     case "goalRate": drafts.goalRate = clampNumeric(); break;
+    case "avgWorkPrice": drafts.avgWorkPrice = clampNumeric(); break;
     case "manualTask": drafts.manualBlock.task = value; updateManualPreview(); break;
     case "manualDate": drafts.manualBlock.date = value; updateManualPreview(); break;
     case "manualTime": drafts.manualBlock.time = value; updateManualPreview(); break;
@@ -3059,10 +3152,15 @@ function onRootInput(e) {
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), label: value };
       break;
     }
+    case "tierDueDate": {
+      const catId = el.dataset.cat;
+      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), dueDate: value };
+      break;
+    }
     case "tierActualPrice": {
       const catId = el.dataset.cat;
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), actualPrice: clampNumeric() };
-      updateGoalPreview(catId);
+      updateGoalPreviewFor(catId);
       break;
     }
     case "costLabel": {
