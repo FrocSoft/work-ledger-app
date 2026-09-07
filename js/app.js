@@ -185,6 +185,7 @@ function defaultState() {
     categories: [],
     activeBlock: null,
     activeSpend: null,
+    cancelledBlock: null,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
     spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
@@ -347,8 +348,12 @@ function onTick() {
     // A tab left open past midnight would otherwise keep showing yesterday's
     // "오늘" numbers until something else forces a render.
     const dayChanged = renderedDay !== todayKey();
+    // The undo banner counts down in minutes, and has to clear itself when the
+    // window closes rather than sitting there offering a dead button.
+    const undoShowing = !!state.cancelledBlock && !state.activeBlock;
+    if (undoShowing && !pendingCancelUndo()) state.cancelledBlock = null;
     if (savingsChanged || spendChanged) persistAndRender();
-    else if (dayChanged) render();
+    else if (dayChanged || undoShowing) render();
   }
 }
 
@@ -699,6 +704,8 @@ function startNextQueueItem() {
   if (state.queue.length === 0) return;
   const next = state.queue.shift();
   const now = Date.now();
+  // Starting fresh means the previous cancel is settled — no stale undo.
+  state.cancelledBlock = null;
   state.activeBlock = {
     id: uid(), task: next.task, workId: next.workId || null, subtaskId: next.subtaskId || null,
     linkedWorks: next.extraLinks || [],
@@ -828,7 +835,51 @@ function completeActiveBlock() {
 
 function finishEarly() { completeActiveBlock(); }
 function skipBreak() { endSession(); persistAndRender(); }
-function cancelBlock() { endSession({ auto: false }); persistAndRender(); }
+
+// 중단은 지금까지 한 시간을 통째로 버립니다. 옆 버튼들과 나란히 있어서 잘못
+// 누르기 쉬웠기 때문에, 버릴 게 있을 때만 무엇을 잃는지 숫자로 묻고,
+// 눌러버린 뒤에도 UNDO_CANCEL_MIN 동안은 되돌릴 수 있게 남겨둡니다.
+const UNDO_CANCEL_MIN = 10;
+function cancelBlock() {
+  const active = state.activeBlock;
+  if (!active) return;
+  const minutes = Math.round(activeElapsedMs(active) / 60000);
+  const points = active.phase === "work"
+    ? computeBlockPoints(segmentsBasePoints(closedSegments(active, Date.now())), minutes)
+    : 0;
+  // 갓 시작해서 버릴 게 없으면 굳이 묻지 않습니다 — 확인창이 잦으면
+  // 정작 중요할 때도 그냥 눌러버리게 되니까요. 물어보지 않은 경우에도
+  // 아래 되돌리기는 그대로 남습니다.
+  if (minutes >= 2) {
+    const worth = points > 0 ? `${minutes}분 · ${points}점` : `${minutes}분`;
+    if (!window.confirm(`지금까지 한 ${worth}을 버리고 중단할까요?\n(기록하려면 "완료"를 누르세요)`)) return;
+  }
+  state.cancelledBlock = { block: active, at: Date.now(), minutes, points };
+  endSession({ auto: false });
+  persistAndRender();
+}
+function undoCancelBlock() {
+  const saved = state.cancelledBlock;
+  if (!saved || state.activeBlock) return;
+  // 중단해둔 사이의 시간은 일한 게 아니므로 일시정지로 쳐서 빼둡니다.
+  const gap = Math.max(0, Date.now() - saved.at);
+  const b = saved.block;
+  state.activeBlock = {
+    ...b,
+    pausedMs: (b.pausedMs || 0) + gap,
+    segPausedMs: (b.segPausedMs || 0) + gap,
+    pausedAt: null,
+  };
+  state.cancelledBlock = null;
+  persistAndRender();
+}
+// 되돌릴 수 있는 창이 아직 열려 있는지.
+function pendingCancelUndo() {
+  const saved = state.cancelledBlock;
+  if (!saved || state.activeBlock) return null;
+  if (Date.now() - saved.at > UNDO_CANCEL_MIN * 60000) return null;
+  return saved;
+}
 
 function addToQueue() {
   const task = drafts.queueDraft.task.trim();
@@ -1502,7 +1553,7 @@ function renderTimerBlock({ label, phaseLabel, durationMin, elapsed, isBreak, pa
           <button class="wl-btn wl-btn--primary" data-action="finishEarly">${ICONS.check} 완료</button>
           <button class="wl-btn wl-btn--ghost" data-action="togglePauseSession">${paused ? `${ICONS.resume} 계속` : `${ICONS.pause} 일시정지`}</button>
           <button class="wl-btn wl-btn--ghost" data-action="toggleSwitchForm">${ICONS.chevron} 할일 전환</button>
-          <button class="wl-btn wl-btn--ghost" data-action="cancelBlock">${ICONS.x} 중단</button>
+          <button class="wl-btn wl-btn--quiet" data-action="cancelBlock">${ICONS.x} 중단</button>
         ` : `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="skipBreak">${ICONS.check} 휴식 종료</button>`}
       </div>
       ${!isBreak && switchFormOpen ? renderSwitchForm() : ""}
@@ -1717,6 +1768,22 @@ function renderQueueSection() {
     </div>`;
 }
 
+// 중단 직후 자리를 지키는 되돌리기. 확인창을 그냥 눌러버린 경우까지 구해줍니다.
+function renderCancelUndo() {
+  const saved = pendingCancelUndo();
+  if (!saved) return "";
+  const left = Math.max(1, UNDO_CANCEL_MIN - Math.floor((Date.now() - saved.at) / 60000));
+  const worth = saved.points > 0 ? `${saved.minutes}분 · ${saved.points}점` : `${saved.minutes}분`;
+  return `
+    <div class="wl-undo">
+      <div class="wl-undo-text">
+        <div class="wl-undo-title">"${escapeHtml(saved.block.task)}" 중단됨</div>
+        <div class="wl-hint">버린 ${worth}을 되살릴 수 있어요 · ${left}분 남음</div>
+      </div>
+      <button class="wl-btn wl-btn--primary" data-action="undoCancelBlock">${ICONS.resume} 되돌리기</button>
+    </div>`;
+}
+
 function renderTimeBlockColumn() {
   const active = state.activeBlock;
   return `
@@ -1731,7 +1798,7 @@ function renderTimeBlockColumn() {
               ? { label: active.task, phaseLabel: "작업 중", durationMin: WORK_MIN, isBreak: false }
               : { label: "휴식", phaseLabel: "휴식 중", durationMin: BREAK_MIN, isBreak: true }),
           })
-        : `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 계획을 짜고 시작해보세요.</div>`}
+        : renderCancelUndo() || `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 계획을 짜고 시작해보세요.</div>`}
     </section>
     <section class="wl-card">
       ${renderQueueSection()}
@@ -2455,6 +2522,7 @@ function runAction(name, ds) {
     case "finishEarly": finishEarly(); break;
     case "togglePauseSession": togglePauseSession(); break;
     case "rateSession": rateSession(ds.rating); break;
+    case "undoCancelBlock": undoCancelBlock(); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
     case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
