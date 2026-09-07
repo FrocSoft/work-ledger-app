@@ -539,7 +539,7 @@ function completeActiveBlock() {
   const newBlock = {
     id: state.activeBlock.id, task: state.activeBlock.task,
     workId: state.activeBlock.workId, subtaskId: state.activeBlock.subtaskId,
-    completedAt, points, minutes,
+    startedAt: state.activeBlock.startedAt, completedAt, points, minutes,
     ...(segments.length > 1 ? { segments } : {}),
   };
   state.blocksByDate[day] = [...blocks, newBlock];
@@ -831,6 +831,11 @@ function workTagBadge(w) {
 function blockMinutes(b) {
   return b.minutes != null ? b.minutes : WORK_MIN;
 }
+// Blocks recorded before the start time was kept fall back to working it out
+// from when they ended.
+function blockStartedAt(b) {
+  return b.startedAt != null ? b.startedAt : b.completedAt - blockMinutes(b) * 60000;
+}
 function findBlockById(blockId) {
   for (const date of Object.keys(state.blocksByDate)) {
     const b = (state.blocksByDate[date] || []).find((x) => x.id === blockId);
@@ -898,6 +903,9 @@ function saveEditBlockMinutes() {
     });
   }
   b.minutes = mins;
+  // The end time is when 완료 was actually pressed, so a corrected duration
+  // moves the start instead — otherwise the logged range would contradict it.
+  b.startedAt = b.completedAt - mins * 60000;
   editingBlockId = null;
   persistAndRender();
 }
@@ -1572,7 +1580,7 @@ function renderBlockLogRow(b) {
   const notes = blockNotes(b.id);
   return `
     <li class="wl-log-row wl-log-row--block">
-      <span class="wl-log-time">${formatTime(b.completedAt)}</span>
+      <span class="wl-log-time wl-log-time--range">${formatTime(blockStartedAt(b))}<span class="wl-log-dash">–</span>${formatTime(b.completedAt)}</span>
       <div class="wl-log-main">
         <div class="wl-log-works">
           ${segs.map((s) => `<span class="wl-log-work">${escapeHtml(workName(s.workId))}<b>${s.minutes}분</b></span>`).join("")}
