@@ -249,6 +249,7 @@ let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
 let switchFormOpen = false;
+let manualBlockOpen = false;
 let floatingTimerOn = false;
 let floatingTimerNote = "";
 let timerWindow = null;
@@ -272,6 +273,7 @@ const drafts = {
   newCost: {},
   queueDraft: { task: "", workId: "", subtaskId: "", extraLinks: [] },
   switchDraft: { task: "", workId: "", subtaskId: "" },
+  manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -879,6 +881,78 @@ function pendingCancelUndo() {
   if (!saved || state.activeBlock) return null;
   if (Date.now() - saved.at > UNDO_CANCEL_MIN * 60000) return null;
   return saved;
+}
+
+// 타이머를 켜지 않고 한 일도 장부에는 남아야 합니다. 시작 시각과 소요시간을
+// 직접 적어 넣으면 블록으로 기록되고, 점수는 평소 규칙 그대로 계산됩니다.
+function toggleManualBlockForm() {
+  manualBlockOpen = !manualBlockOpen;
+  if (manualBlockOpen) {
+    const now = new Date();
+    drafts.manualBlock = {
+      task: "", workId: "", subtaskId: "",
+      date: todayKey(now),
+      time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+      minutes: "",
+    };
+  }
+  render();
+}
+// 폼에 적힌 값으로 만들어질 블록. 미리보기와 실제 저장이 같은 값을 쓰도록
+// 한 군데서 계산합니다. 입력이 덜 됐으면 null.
+function manualBlockPreview() {
+  const d = drafts.manualBlock;
+  const minutes = Math.round(Number(d.minutes));
+  if (!Number.isFinite(minutes) || minutes <= 0) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !/^\d{2}:\d{2}$/.test(d.time)) return null;
+  const [y, mo, da] = d.date.split("-").map(Number);
+  const [h, mi] = d.time.split(":").map(Number);
+  const startedAt = new Date(y, mo - 1, da, h, mi, 0, 0).getTime();
+  if (!Number.isFinite(startedAt)) return null;
+  return {
+    startedAt, completedAt: startedAt + minutes * 60000, minutes,
+    points: computeBlockPoints(pointsForWork(d.workId || null), minutes),
+    day: d.date,
+  };
+}
+function addManualBlock() {
+  const d = drafts.manualBlock;
+  const p = manualBlockPreview();
+  const task = d.task.trim();
+  if (!p || !task) return;
+  const block = {
+    id: uid(), task, workId: d.workId || null, subtaskId: d.subtaskId || null,
+    startedAt: p.startedAt, completedAt: p.completedAt, minutes: p.minutes, points: p.points,
+    rating: null, repaid: 0, manual: true,
+  };
+  state.blocksByDate[p.day] = [...(state.blocksByDate[p.day] || []), block]
+    .sort((a, b) => a.completedAt - b.completedAt);
+  repayBorrowed(p.day, block);
+  // 할일에도 한 줄 남겨야 할일 관리의 세션 기록에서 같이 보입니다.
+  const w = d.workId ? state.works.find((x) => x.id === d.workId) : null;
+  if (w) {
+    const sub = d.subtaskId ? (w.subtasks || []).find((s) => s.id === d.subtaskId) : null;
+    w.updates = w.updates || [];
+    w.updates.unshift({
+      id: uid(), text: `${sub ? `[${sub.name}] ` : ""}${task}`, image: null,
+      at: p.completedAt, auto: false, blockId: block.id,
+    });
+  }
+  manualBlockOpen = false;
+  drafts.manualBlock = { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" };
+  persistAndRender();
+}
+// 잘못 넣은 블록을 지웁니다. 갚았던 빚은 되돌리고, 할일에 남긴 기록은
+// 손대지 않습니다 — 직접 쓴 메모까지 같이 사라지면 곤란하니까요.
+function removeBlock(blockId) {
+  const { block, day } = findBlockEntry(blockId);
+  if (!block) return;
+  const worth = block.points > 0 ? `${blockMinutes(block)}분 · ${block.points}점` : `${blockMinutes(block)}분`;
+  if (!window.confirm(`"${block.task}" 기록(${worth})을 지울까요?`)) return;
+  block.points = 0;
+  repayBorrowed(day, block); // 이 블록으로 갚았던 저축을 원위치
+  state.blocksByDate[day] = (state.blocksByDate[day] || []).filter((b) => b.id !== blockId);
+  persistAndRender();
 }
 
 function addToQueue() {
@@ -1929,7 +2003,11 @@ function renderTodaySummaryColumn() {
       ${spendPresetsEditOpen ? renderSpendPresetsEditor() : (state.activeSpend ? renderActiveSpendTimer() : renderSpendPresetButtons())}
     </section>
     <section class="wl-card">
-      <div class="wl-card-title">오늘의 기록</div>
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">오늘의 기록</div>
+        <button class="wl-icon-btn" data-action="toggleManualBlockForm" title="세션 없이 한 일 기록">${manualBlockOpen ? ICONS.x : ICONS.plus}</button>
+      </div>
+      ${manualBlockOpen ? renderManualBlockForm() : ""}
       ${todayBlocks.length === 0 && todaySpends.length === 0 ? `<div class="wl-empty">아직 기록이 없어요.</div>` : ""}
       <ul class="wl-log">
         ${mergeLog(todayBlocks, todaySpends).map((item) => item.kind === "block" ? renderBlockLogRow(item.block) : `
@@ -1940,6 +2018,33 @@ function renderTodaySummaryColumn() {
           </li>`).join("")}
       </ul>
     </section>`;
+}
+
+// 타이머 없이 한 일을 직접 적어 넣는 폼. 시작 시각을 직접 넣기 때문에
+// 완료 후 소요시간만 고치는 우회로와 달리 기록된 시간대가 실제와 맞습니다.
+function renderManualBlockForm() {
+  const d = drafts.manualBlock;
+  const p = manualBlockPreview();
+  return `
+    <div class="wl-manual">
+      <div class="wl-hint">타이머를 안 켜고 한 일을 기록해요. 점수는 평소 규칙 그대로 계산됩니다.</div>
+      ${renderWorkLinkRow({
+        workId: d.workId, subtaskId: d.subtaskId,
+        workSelect: "manualWork", subSelect: "manualSub", placeholder: "할일 연결 안 함",
+      })}
+      <div class="wl-field-row wl-field-row--tight">
+        <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="manualTask" data-enter-action="addManualBlock" value="${escapeAttr(d.task)}" />
+      </div>
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" type="date" data-draft="manualDate" value="${escapeAttr(d.date)}" />
+        <input class="wl-input wl-input--sm" type="time" data-draft="manualTime" value="${escapeAttr(d.time)}" />
+        <input class="wl-input wl-input--num" placeholder="분" inputmode="numeric" data-draft="manualMinutes" data-enter-action="addManualBlock" value="${escapeAttr(d.minutes)}" />
+      </div>
+      <div class="wl-hint">${p
+        ? `${formatTime(p.startedAt)}–${formatTime(p.completedAt)} · ${p.minutes}분 → <b>${p.points}점</b>${p.points === 0 ? " (25분 이하는 기록만)" : ""}`
+        : "시작 시각과 소요시간을 넣으면 점수가 미리 보여요."}</div>
+      <button class="wl-btn wl-btn--primary wl-btn--full" data-action="addManualBlock"${p && d.task.trim() ? "" : " disabled"}>${ICONS.plus} 기록 추가</button>
+    </div>`;
 }
 
 // Notes written during a session, so the log shows what actually happened and
@@ -1963,7 +2068,8 @@ function renderBlockLogRow(b) {
   const segs = blockSegments(b).filter((s) => s.minutes > 0);
   if (segs.length === 0) return "";
   const tasks = [...new Set(segs.map((s) => s.task).filter(Boolean))];
-  const notes = blockNotes(b.id);
+  // 직접 입력한 기록은 메모와 할일 이름이 같은 문장이라 두 번 찍힙니다.
+  const notes = blockNotes(b.id).filter((n) => !tasks.some((t) => n === t || n.endsWith(`] ${t}`)));
   return `
     <li class="wl-log-row wl-log-row--block">
       <span class="wl-log-time wl-log-time--range">${formatTime(blockStartedAt(b))}<span class="wl-log-dash">–</span>${formatTime(b.completedAt)}</span>
@@ -1971,10 +2077,11 @@ function renderBlockLogRow(b) {
         <div class="wl-log-works">
           ${segs.map((s) => `<span class="wl-log-work">${escapeHtml(workName(s.workId))}<b>${s.minutes}분</b></span>`).join("")}
         </div>
-        ${tasks.length ? `<div class="wl-log-label">${escapeHtml(tasks.join(" · "))}${ratingBadge(b)}</div>` : ""}
+        ${tasks.length ? `<div class="wl-log-label">${escapeHtml(tasks.join(" · "))}${ratingBadge(b)}${b.manual ? ` <span class="wl-rating-badge">직접 입력</span>` : ""}</div>` : ""}
         ${notes.map((n) => `<div class="wl-log-note">${escapeHtml(n)}</div>`).join("")}
       </div>
       <span class="wl-log-points">+${blockPoints(b)}</span>
+      <button class="wl-icon-btn wl-log-del" data-action="removeBlock" data-block="${b.id}" title="기록 삭제">${ICONS.x}</button>
     </li>`;
 }
 
@@ -2523,6 +2630,9 @@ function runAction(name, ds) {
     case "togglePauseSession": togglePauseSession(); break;
     case "rateSession": rateSession(ds.rating); break;
     case "undoCancelBlock": undoCancelBlock(); break;
+    case "toggleManualBlockForm": toggleManualBlockForm(); break;
+    case "addManualBlock": addManualBlock(); break;
+    case "removeBlock": removeBlock(ds.block); break;
     case "skipBreak": skipBreak(); break;
     case "cancelBlock": cancelBlock(); break;
     case "spendPreset": startSpendTimer(ds.label, Number(ds.cost)); break;
@@ -2653,6 +2763,11 @@ function onRootInput(e) {
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "pendingUpdateCostLabel": drafts.pendingUpdate.costLabel = value; break;
     case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;
+    case "manualTask": drafts.manualBlock.task = value; break;
+    // 시각과 분은 점수 미리보기를 즉시 갱신해야 하므로 다시 그립니다.
+    case "manualDate": drafts.manualBlock.date = value; render(); break;
+    case "manualTime": drafts.manualBlock.time = value; render(); break;
+    case "manualMinutes": drafts.manualBlock.minutes = clampNumeric(); render(); break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
     case "editCategoryName": editingCategoryDraft = value; break;
@@ -2715,6 +2830,8 @@ async function onRootChange(e) {
   const select = e.target.closest("[data-select]");
   if (select) {
     const kind = select.dataset.select;
+    if (kind === "manualWork") { drafts.manualBlock.workId = select.value; drafts.manualBlock.subtaskId = ""; render(); }
+    if (kind === "manualSub") { drafts.manualBlock.subtaskId = select.value; render(); }
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
     if (kind === "queueExtraWork") { const l = drafts.queueDraft.extraLinks[Number(select.dataset.index)]; if (l) { l.workId = select.value; l.subtaskId = ""; render(); } }

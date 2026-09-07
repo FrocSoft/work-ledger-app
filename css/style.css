@@ -218,6 +218,17 @@ body {
 .wl-timer .wl-hint { margin: 2px 0 12px; }
 .wl-timer-actions { display: flex; gap: 8px; width: 100%; flex-wrap: wrap; }
 .wl-timer-actions .wl-btn { flex: 1 1 40%; }
+/* Manual entry for work done off the timer. */
+.wl-manual { padding: 10px 0 4px; border-bottom: 1px solid var(--wl-border); margin-bottom: 10px; }
+.wl-manual .wl-field-row { margin-top: 8px; }
+.wl-manual .wl-btn { margin-top: 10px; }
+.wl-manual .wl-btn[disabled] { opacity: .45; cursor: not-allowed; }
+.wl-manual input[type="date"], .wl-manual input[type="time"] { flex: 1 1 auto; min-width: 0; }
+/* The per-row delete stays out of the way until the row is hovered. */
+.wl-log-del { opacity: 0; margin-left: 2px; }
+.wl-log-row:hover .wl-log-del, .wl-log-del:focus { opacity: .7; }
+@media (hover: none) { .wl-log-del { opacity: .5; } }
+
 /* The undo offer that takes the place of the empty timer card after a cancel. */
 .wl-undo { display: flex; align-items: center; gap: 12px; padding: 14px 4px; }
 .wl-undo-text { flex: 1; min-width: 0; }
