@@ -378,7 +378,7 @@ body {
 .wl-col-head { padding: 0 2px 2px; }
 .wl-project-status { display: flex; gap: 8px; margin-bottom: 8px; }
 .wl-project-status-text { font-size: 12.5px; color: var(--wl-text); overflow-wrap: break-word; align-self: center; }
-.wl-project-money { display: flex; gap: 12px; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 6px; }
+.wl-project-money { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--wl-text-muted); margin-bottom: 6px; }
 .wl-project-money b { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--wl-text); }
 .wl-cost-toggle {
   background: none; border: none; color: var(--wl-text-muted); font-family: inherit;
@@ -406,11 +406,6 @@ body {
 .wl-cost-label { flex: 1; min-width: 0; overflow-wrap: break-word; }
 .wl-cost-amount { font-family: 'IBM Plex Mono', monospace; font-weight: 500; white-space: nowrap; }
 .wl-cost-total { font-family: 'IBM Plex Mono', monospace; color: var(--wl-text-muted); font-weight: 400; }
-.wl-money-toggle {
-  display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0;
-  font-family: inherit; font-size: 11px; color: var(--wl-text-muted); cursor: pointer;
-}
-.wl-money-toggle b { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--wl-text); }
 .wl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; margin: 8px 0 0; }
 .wl-chip {
   display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px;

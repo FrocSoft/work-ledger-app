@@ -223,7 +223,6 @@ let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
 let switchFormOpen = false;
-let costListOpen = {};
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 
@@ -1413,9 +1412,6 @@ function renderTimeBlockColumn() {
 function renderProjectStatusRow(w) {
   const latest = (w.updates || [])[0];
   const nextSubtask = (w.subtasks || []).find((s) => !s.done);
-  const costTotal = workCostTotal(w);
-  const costDraft = drafts.newCost[w.id] || {};
-  const costOpen = !!costFormOpen[w.id];
   const done = (w.subtasks || []).filter((s) => s.done).length;
   const total = (w.subtasks || []).length;
   const pct = total ? Math.round((done / total) * 100) : 0;
@@ -1440,29 +1436,6 @@ function renderProjectStatusRow(w) {
           <button class="wl-checkbox" data-action="toggleSubtask" data-work="${w.id}" data-sub="${nextSubtask.id}"></button>
           <span class="wl-subtask-name">${escapeHtml(nextSubtask.name)}</span>
         </div>` : ""}
-      <div class="wl-project-money">
-        ${(w.costs || []).length > 0
-          ? `<button class="wl-money-toggle" data-action="toggleCostList" data-work="${w.id}">쓴 비용 <b>${costTotal.toLocaleString()}원</b> <span class="wl-goal-cat-toggle-icon ${costListOpen[w.id] ? "is-expanded" : ""}">${ICONS.chevron}</span></button>`
-          : `<span>쓴 비용 <b>0원</b></span>`}
-        <span>판매예상 <b>${w.expectedSalePrice != null ? `${w.expectedSalePrice.toLocaleString()}원` : "미설정"}</b></span>
-      </div>
-      ${costListOpen[w.id] ? `
-        <ul class="wl-cost-list">
-          ${[...(w.costs || [])].sort((a, b) => b.at - a.at).map((c) => `
-            <li class="wl-cost-row">
-              <span class="wl-cost-date">${escapeHtml(formatKDate(new Date(c.at)))}</span>
-              <span class="wl-cost-label">${escapeHtml(c.label || "비용")}</span>
-              <span class="wl-cost-amount">${c.amount.toLocaleString()}원</span>
-              <button class="wl-icon-btn" data-action="removeWorkCost" data-work="${w.id}" data-cost="${c.id}">${ICONS.x}</button>
-            </li>`).join("")}
-        </ul>` : ""}
-      ${costOpen ? `
-        <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
-          <input class="wl-input wl-input--sm" placeholder="쓴 비용 추가" data-draft="costLabel" data-work="${w.id}" value="${escapeAttr(costDraft.label || "")}" />
-          <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
-          <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.check}</button>
-          <button class="wl-btn wl-btn--ghost" data-action="toggleCostForm" data-work="${w.id}">${ICONS.x}</button>
-        </div>` : `<button class="wl-cost-toggle" data-action="toggleCostForm" data-work="${w.id}">${ICONS.plus} 비용 추가</button>`}
     </section>`;
 }
 
@@ -1734,23 +1707,38 @@ function renderDashboard() {
     </div>`;
 }
 
-// Every cost is stored with its own label and date; this is where they can be
-// read back and removed one by one, rather than only as a total.
-function renderCostList(w) {
-  const costs = w.costs || [];
-  if (costs.length === 0) return "";
-  const sorted = [...costs].sort((a, b) => b.at - a.at);
+// Money lives in 할일 관리, not on the dashboard: costs are entered and read
+// back here, item by item, against the project's expected sale price.
+function renderCostSection(w) {
+  const costs = [...(w.costs || [])].sort((a, b) => b.at - a.at);
+  const costDraft = drafts.newCost[w.id] || {};
+  const costOpen = !!costFormOpen[w.id];
+  const total = workCostTotal(w);
+  const expected = w.expectedSalePrice;
   return `
-    <div class="wl-card-title" style="margin-top:14px">쓴 비용 <span class="wl-cost-total">${workCostTotal(w).toLocaleString()}원</span></div>
-    <ul class="wl-cost-list">
-      ${sorted.map((c) => `
-        <li class="wl-cost-row">
-          <span class="wl-cost-date">${escapeHtml(formatKDate(new Date(c.at)))}</span>
-          <span class="wl-cost-label">${escapeHtml(c.label || "비용")}</span>
-          <span class="wl-cost-amount">${c.amount.toLocaleString()}원</span>
-          <button class="wl-icon-btn" data-action="removeWorkCost" data-work="${w.id}" data-cost="${c.id}">${ICONS.x}</button>
-        </li>`).join("")}
-    </ul>`;
+    <div class="wl-card-title" style="margin-top:14px">비용</div>
+    <div class="wl-project-money">
+      <span>쓴 비용 <b>${total.toLocaleString()}원</b></span>
+      <span>판매예상 <b>${expected != null ? `${expected.toLocaleString()}원` : "미설정"}</b></span>
+      ${expected != null ? `<span>남는 돈 <b>${(expected - total).toLocaleString()}원</b></span>` : ""}
+    </div>
+    ${costs.length > 0 ? `
+      <ul class="wl-cost-list">
+        ${costs.map((c) => `
+          <li class="wl-cost-row">
+            <span class="wl-cost-date">${escapeHtml(formatKDate(new Date(c.at)))}</span>
+            <span class="wl-cost-label">${escapeHtml(c.label || "비용")}</span>
+            <span class="wl-cost-amount">${c.amount.toLocaleString()}원</span>
+            <button class="wl-icon-btn" data-action="removeWorkCost" data-work="${w.id}" data-cost="${c.id}">${ICONS.x}</button>
+          </li>`).join("")}
+      </ul>` : ""}
+    ${costOpen ? `
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="쓴 비용 추가" data-draft="costLabel" data-work="${w.id}" value="${escapeAttr(costDraft.label || "")}" />
+        <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.check}</button>
+        <button class="wl-btn wl-btn--ghost" data-action="toggleCostForm" data-work="${w.id}">${ICONS.x}</button>
+      </div>` : `<button class="wl-cost-toggle" data-action="toggleCostForm" data-work="${w.id}">${ICONS.plus} 비용 추가</button>`}`;
 }
 
 // ---- render: works-manage tab ----
@@ -1810,7 +1798,7 @@ function renderWorkManageCard(w) {
           <input class="wl-input wl-input--sm" placeholder="하위 할일 추가" data-draft="newSubtask" data-work="${w.id}" data-enter-action="addSubtask" value="${escapeAttr(drafts.newSubtask[w.id] || "")}" />
           <button class="wl-btn wl-btn--ghost" data-action="addSubtask" data-work="${w.id}">${ICONS.plus}</button>
         </div>
-        ${renderCostList(w)}
+        ${renderCostSection(w)}
         ${(w.updates || []).length > 0 ? `
           <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
           <ul class="wl-session-log">
@@ -2151,7 +2139,6 @@ function runAction(name, ds) {
     case "removeSubtask": removeSubtask(ds.work, ds.sub); break;
     case "addWorkCost": addWorkCost(ds.work); break;
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
-    case "toggleCostList": costListOpen[ds.work] = !costListOpen[ds.work]; render(); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
     case "editBlockMinutes": startEditBlockMinutes(ds.block); break;
     case "saveEditBlockMinutes": saveEditBlockMinutes(); break;
