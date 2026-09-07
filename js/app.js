@@ -19,6 +19,9 @@ const DEFAULT_SPEND_PRESETS = [
 // 전속계약 5:5가 원칙이라 전역 기본값 하나로 둡니다. 갤러리 수수료만이 아니라
 // 세금·수수료처럼 위에서 떼이는 것 전부를 흡수하는 "실수령률"입니다.
 const DEFAULT_PAYOUT_RATE = 50;
+// 물건값이 수입의 몇 %여야 살 만한가. 보수적으로 5%가 기본값이고, 목표 금액은
+// 여기서 자동으로 나옵니다 — 실제 가격만 넣으면 얼마를 벌어야 하는지가 정해집니다.
+const DEFAULT_GOAL_RATE = 5;
 const DEFAULT_TAGS = [
   { name: "제작", points: 3 },
   { name: "개발", points: 2 },
@@ -190,6 +193,7 @@ function defaultState() {
     activeSpend: null,
     cancelledBlock: null,
     payoutRate: DEFAULT_PAYOUT_RATE,
+    goalRate: DEFAULT_GOAL_RATE,
     queue: [],
     tags: DEFAULT_TAGS.map((t) => ({ id: uid(), ...t })),
     spendPresets: DEFAULT_SPEND_PRESETS.map((p) => ({ id: uid(), label: p.label, cost: p.cost })),
@@ -232,6 +236,9 @@ function normalizeState(s) {
   }
   s.works.forEach((w) => { w.wip = w.wip === true; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
+  if (typeof s.goalRate !== "number" || !(s.goalRate > 0)) s.goalRate = DEFAULT_GOAL_RATE;
+  // 목표 금액은 실제 가격에서 파생되는 값이라 저장본과 어긋날 수 없게 매번 맞춥니다.
+  s.categories.forEach((c) => c.tiers.forEach((t) => { t.targetAmount = goalTargetFor(t.actualPrice, s.goalRate); }));
   return s;
 }
 
@@ -292,6 +299,7 @@ const drafts = {
   manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
   saleAmount: {},
   payoutRate: null,
+  goalRate: null,
   settings: null,
   settingsMsg: null,
   settingsBusy: false,
@@ -1453,9 +1461,9 @@ function saveEditCategory() {
 }
 function addTier(catId) {
   const draft = drafts.newTier[catId] || {};
-  const targetAmount = Number(draft.targetAmount);
-  const actualPrice = draft.actualPrice ? Number(draft.actualPrice) : targetAmount;
-  if (!draft.label || !draft.label.trim() || !targetAmount || targetAmount <= 0) return;
+  const actualPrice = Number(draft.actualPrice);
+  if (!draft.label || !draft.label.trim() || !actualPrice || actualPrice <= 0) return;
+  const targetAmount = goalTargetFor(actualPrice);
   const c = state.categories.find((x) => x.id === catId);
   if (!c) return;
   if (draft.editingId) {
@@ -1469,7 +1477,7 @@ function addTier(catId) {
   } else {
     c.tiers.push({ id: uid(), label: draft.label.trim(), targetAmount, actualPrice, image: draft.image || null });
   }
-  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
+  drafts.newTier[catId] = { label: "", actualPrice: "", image: null };
   persistAndRender();
 }
 function startEditTier(catId, tierId) {
@@ -1477,13 +1485,13 @@ function startEditTier(catId, tierId) {
   const t = c && c.tiers.find((x) => x.id === tierId);
   if (!t) return;
   drafts.newTier[catId] = {
-    label: t.label, targetAmount: String(t.targetAmount), actualPrice: String(t.actualPrice),
+    label: t.label, actualPrice: String(t.actualPrice),
     image: t.image || null, editingId: t.id,
   };
   render();
 }
 function cancelEditTier(catId) {
-  drafts.newTier[catId] = { label: "", targetAmount: "", actualPrice: "", image: null };
+  drafts.newTier[catId] = { label: "", actualPrice: "", image: null };
   render();
 }
 function removeTier(catId, tierId) {
@@ -2249,7 +2257,8 @@ function renderLuxuryRatio(t) {
     return `<div class="wl-hint">최근 12개월 실수령이 기록되면 연 수입 대비 비율을 계산해요</div>`;
   }
   const pct = (t.actualPrice / yearly) * 100;
-  return `<div class="wl-hint">최근 12개월 실수령 ${formatMoney(yearly)}의 <b>${pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10}%</b> · 사치품 통념 5~10%</div>`;
+  // 판정하지 않고 목표 기준과 나란히 놓기만 합니다.
+  return `<div class="wl-hint">최근 12개월 실수령 ${formatMoney(yearly)}의 <b>${pct >= 10 ? Math.round(pct) : Math.round(pct * 10) / 10}%</b> · 목표 기준 ${state.goalRate}%</div>`;
 }
 function formatMoney(n) {
   const won = Math.round(n);
@@ -2379,6 +2388,15 @@ function savePayoutRate() {
   drafts.payoutRate = null;
   persistAndRender();
 }
+// 비율을 바꾸면 모든 목표 금액이 따라 움직입니다 — 파생값이니까요.
+function saveGoalRate() {
+  const v = Number(drafts.goalRate);
+  if (!Number.isFinite(v) || v <= 0 || v > 100) return;
+  state.goalRate = v;
+  state.categories.forEach((c) => c.tiers.forEach((t) => { t.targetAmount = goalTargetFor(t.actualPrice); }));
+  drafts.goalRate = null;
+  persistAndRender();
+}
 function markCompleted(workId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
@@ -2433,6 +2451,23 @@ function revenueLast12Months() {
   return state.revenueLog
     .filter((r) => r.date >= fromKey)
     .reduce((a, r) => a + r.amount, 0);
+}
+
+// 살 만해지는 수입 = 물건값 ÷ 비율. 5%면 물건값의 20배를 벌어야 합니다.
+function goalPreviewText(actualPrice) {
+  const price = Number(actualPrice);
+  if (!price || price <= 0) return `실제 가격을 넣으면 목표 금액이 자동으로 정해져요 (수입의 ${state.goalRate}%).`;
+  return `실제 가격 ${formatMoney(price)} → 누적 수입 <b>${formatMoney(goalTargetFor(price))}</b>을 벌면 살 만해요 (수입의 ${state.goalRate}%).`;
+}
+// 입력 중에는 다시 그리지 않고 이 줄만 바꿉니다 — render()는 innerHTML을
+// 통째로 갈아끼워서 타이핑 중이면 커서가 날아갑니다.
+function updateGoalPreview(catId) {
+  const el = document.querySelector(`[data-goal-preview="${catId}"]`);
+  if (el) el.innerHTML = goalPreviewText((drafts.newTier[catId] || {}).actualPrice);
+}
+function goalTargetFor(actualPrice, rate) {
+  const r = (rate != null ? rate : state.goalRate) / 100;
+  return Math.round((Number(actualPrice) || 0) / r);
 }
 
 function renderCostSection(w) {
@@ -2670,12 +2705,12 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
       <ul class="wl-tiers">${tiers.map((t) => renderTierRow(t, totalRevenue, true, c.id)).join("")}</ul>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="가격대 이름" data-draft="tierLabel" data-cat="${c.id}" value="${escapeAttr(draft.label || "")}" />
-        <input class="wl-input wl-input--num" placeholder="목표 금액" inputmode="numeric" data-draft="tierTargetAmount" data-cat="${c.id}" value="${escapeAttr(draft.targetAmount || "")}" />
-        <input class="wl-input wl-input--num" placeholder="실제 가격(선택)" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
+        <input class="wl-input wl-input--num" placeholder="실제 가격" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
         ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${draft.editingId ? ICONS.check : ICONS.plus} ${draft.editingId ? "저장" : ""}</button>
         ${draft.editingId ? `<button class="wl-btn wl-btn--ghost" data-action="cancelEditTier" data-cat="${c.id}">${ICONS.x}</button>` : ""}
       </div>
+      <div class="wl-hint" data-goal-preview="${c.id}">${goalPreviewText(draft.actualPrice)}</div>
     </section>`;
 }
 
@@ -2691,6 +2726,15 @@ function renderGoalsManage() {
           <button class="wl-btn wl-btn--ghost" data-action="savePayoutRate">${ICONS.check}</button>
         </div>
         <div class="wl-hint">판매예상 100만원이면 실수령 ${netOf(1000000).toLocaleString()}원으로 계산합니다. 세금·수수료까지 위에서 떼이는 걸 모두 포함한 비율로 잡으세요.</div>
+      </section>
+      <section class="wl-card">
+        <div class="wl-card-title">목표 비율</div>
+        <div class="wl-field-row wl-field-row--tight">
+          <input class="wl-input wl-input--num" inputmode="numeric" data-draft="goalRate" data-enter-action="saveGoalRate" value="${escapeAttr(drafts.goalRate != null ? drafts.goalRate : String(state.goalRate))}" />
+          <span class="wl-hint" style="flex:1">% — 물건값이 수입의 이 비율이 되면 살 만하다고 봅니다</span>
+          <button class="wl-btn wl-btn--ghost" data-action="saveGoalRate">${ICONS.check}</button>
+        </div>
+        <div class="wl-hint">낮출수록 보수적이에요. ${state.goalRate}%면 ${formatMoney(1000000)}짜리를 사려면 누적 ${formatMoney(goalTargetFor(1000000))}을 벌어야 합니다.</div>
       </section>
       <section class="wl-card">
         <div class="wl-field-row">
@@ -2896,6 +2940,7 @@ function runAction(name, ds) {
     case "archiveWork": archiveWork(ds.work); break;
     case "toggleWorkWip": toggleWorkWip(ds.work); break;
     case "savePayoutRate": savePayoutRate(); break;
+    case "saveGoalRate": saveGoalRate(); break;
     case "markCompleted": markCompleted(ds.work); break;
     case "unmarkCompleted": unmarkCompleted(ds.work); break;
     case "markSold": markSold(ds.work); break;
@@ -3001,6 +3046,7 @@ function onRootInput(e) {
     case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;
     case "saleAmount": drafts.saleAmount[el.dataset.work] = clampNumeric(); break;
     case "payoutRate": drafts.payoutRate = clampNumeric(); break;
+    case "goalRate": drafts.goalRate = clampNumeric(); break;
     case "manualTask": drafts.manualBlock.task = value; updateManualPreview(); break;
     case "manualDate": drafts.manualBlock.date = value; updateManualPreview(); break;
     case "manualTime": drafts.manualBlock.time = value; updateManualPreview(); break;
@@ -3013,14 +3059,10 @@ function onRootInput(e) {
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), label: value };
       break;
     }
-    case "tierTargetAmount": {
-      const catId = el.dataset.cat;
-      drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), targetAmount: clampNumeric() };
-      break;
-    }
     case "tierActualPrice": {
       const catId = el.dataset.cat;
       drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), actualPrice: clampNumeric() };
+      updateGoalPreview(catId);
       break;
     }
     case "costLabel": {
