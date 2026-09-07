@@ -2407,6 +2407,11 @@ function renderDashboard() {
 // back here, item by item, against the project's expected sale price.
 // 완성한 뒤에야 팔렸는지 따질 수 있으므로 두 상태를 나눠 둡니다.
 // 완성했지만 아직 안 팔린 것들의 예상 실수령 합계가 곧 파이프라인입니다.
+// 하위 할일이 남아 있으면 완성이 아닙니다. 버튼을 눌리지 않게 막고
+// 몇 개가 남았는지 알려줍니다.
+function subtasksLeft(w) {
+  return (w.subtasks || []).filter((st) => !st.done).length;
+}
 function renderSaleRow(w) {
   const draft = drafts.saleAmount[w.id];
   if (w.sale) {
@@ -2418,10 +2423,11 @@ function renderSaleRow(w) {
       </div>`;
   }
   if (!w.completed) {
+    const left = subtasksLeft(w);
     return `
       <div class="wl-sale">
-        <span class="wl-hint">아직 작업 중이에요.</span>
-        <button class="wl-btn wl-btn--ghost" data-action="markCompleted" data-work="${w.id}">${ICONS.check} 완성</button>
+        <span class="wl-hint">${left > 0 ? `하위 할일 ${left}개가 남았어요.` : "하위 할일을 다 끝냈어요."}</span>
+        <button class="wl-btn wl-btn--ghost" data-action="markCompleted" data-work="${w.id}"${left > 0 ? " disabled" : ""}>${ICONS.check} 완성</button>
       </div>`;
   }
   return `
@@ -2432,7 +2438,6 @@ function renderSaleRow(w) {
                data-draft="saleAmount" data-work="${w.id}" data-enter-action="markSold"
                value="${escapeAttr(draft != null ? draft : String(netOf(w.expectedSalePrice)))}" />
         <button class="wl-btn wl-btn--primary" data-action="markSold" data-work="${w.id}">판매됨</button>
-        <button class="wl-btn wl-btn--quiet" data-action="unmarkCompleted" data-work="${w.id}">완성 취소</button>
       </div>
     </div>`;
 }
@@ -2472,6 +2477,7 @@ function toggleCategoryKind(catId) {
 function markCompleted(workId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
+  if (subtasksLeft(w) > 0) return;
   w.completed = Date.now();
   w.wip = false; // 완성했으면 더는 진행 중이 아닙니다
   persistAndRender();
@@ -2628,11 +2634,13 @@ function renderWorkManageCard(w) {
             <button class="wl-icon-btn" data-action="removeWork" data-work="${w.id}">${ICONS.trash}</button>
           </div>`}
       </div>
-      <div class="wl-progress">
-        <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
-        <span class="wl-progress-label">${done}/${total}</span>
-      </div>
+      ${w.completed ? "" : `
+        <div class="wl-progress">
+          <div class="wl-progress-bar"><div class="wl-progress-fill" style="width:${pct}%"></div></div>
+          <span class="wl-progress-label">${done}/${total}</span>
+        </div>`}
       ${collapsed ? "" : `
+        ${w.completed ? "" : `
         <ul class="wl-subtasks">
           ${w.subtasks.map((st, idx) => {
             const mins = subtaskMinutes(w.id, st.id);
@@ -2649,7 +2657,7 @@ function renderWorkManageCard(w) {
         <div class="wl-field-row wl-field-row--tight">
           <input class="wl-input wl-input--sm" placeholder="하위 할일 추가" data-draft="newSubtask" data-work="${w.id}" data-enter-action="addSubtask" value="${escapeAttr(drafts.newSubtask[w.id] || "")}" />
           <button class="wl-btn wl-btn--ghost" data-action="addSubtask" data-work="${w.id}">${ICONS.plus}</button>
-        </div>
+        </div>`}
         ${renderCostSection(w)}
         ${(w.updates || []).length > 0 ? `
           <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
