@@ -575,7 +575,7 @@ body {
 
 /* 기록 보기(주별·월별). 막대는 계열이 하나뿐이라 범례가 없고, 제목이 무엇을
    재는지 말해줍니다. 데이터 끝만 둥글게 두고 축 쪽은 각지게 붙여둡니다. */
-.wl-logpanel { max-width: 520px; }
+.wl-logbody { max-width: 520px; }
 .wl-log-scale { display: flex; gap: 4px; margin: 14px 0 4px; border-bottom: 1px solid var(--wl-border); }
 .wl-log-nav { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 14px; }
 .wl-log-period { font-size: 13px; font-family: 'IBM Plex Mono', monospace; }
@@ -593,7 +593,7 @@ body {
 .wl-log-day { margin-top: 12px; }
 .wl-log-day .wl-log { margin-top: 4px; }
 /* 4칸 안에 "3시간 50분"이 들어가야 해서 이 패널에서만 값 글자를 줄입니다. */
-.wl-logpanel .wl-figure-value { font-size: 14px; }
+.wl-logbody .wl-figure-value { font-size: 14px; }
 
 /* 주간·월간 목표. 고르는 목록과 정해진 목록이 같은 체크 모양을 쓰되,
    정해진 쪽은 읽기 전용이라 버튼이 아닙니다. */
