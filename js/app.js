@@ -287,7 +287,6 @@ let spendPresetsEditOpen = false;
 let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
-let logOpen = false;
 let logScale = "week"; // week | month
 let logAnchor = null;
 let goalPickerOpen = false;  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
@@ -1573,7 +1572,13 @@ function closeImageLightbox() {
 }
 
 // ---- actions: settings ----
-function switchTab(tab) { currentTab = tab; render(); }
+function switchTab(tab) {
+  // 기록 탭은 늘 이번 기간에서 시작합니다 — 지난달을 보다 나갔다 돌아왔는데
+  // 여전히 지난달이면 지금이 어디인지 헷갈립니다.
+  if (tab === "log") { logScale = "week"; logAnchor = null; goalPickerOpen = false; }
+  currentTab = tab;
+  render();
+}
 
 function openSettings() {
   drafts.settings = getCredentials();
@@ -2124,10 +2129,7 @@ function renderTodaySummaryColumn() {
     <section class="wl-card">
       <div class="wl-work-head">
         <div class="wl-card-title" style="margin-bottom:0">오늘의 기록</div>
-        <div>
-          <button class="wl-icon-btn" data-action="openLogView" title="주별 · 월별 기록">${ICONS.archive}</button>
-          <button class="wl-icon-btn" data-action="toggleManualBlockForm" title="세션 없이 한 일 기록">${manualBlockOpen ? ICONS.x : ICONS.plus}</button>
-        </div>
+        <button class="wl-icon-btn" data-action="toggleManualBlockForm" title="세션 없이 한 일 기록">${manualBlockOpen ? ICONS.x : ICONS.plus}</button>
       </div>
       ${manualBlockOpen ? renderManualBlockForm() : ""}
       ${todayBlocks.length === 0 && todaySpends.length === 0 ? `<div class="wl-empty">아직 기록이 없어요.</div>` : ""}
@@ -2882,14 +2884,16 @@ function renderShell() {
         </div>
         <nav class="wl-tabs">
           <button class="wl-tab ${currentTab === "dashboard" ? "is-active" : ""}" data-action="switchTab" data-tab="dashboard">홈</button>
-          <button class="wl-tab ${currentTab === "works-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="works-manage">할일 관리</button>
-          <button class="wl-tab ${currentTab === "works-done" ? "is-active" : ""}" data-action="switchTab" data-tab="works-done">작품 관리</button>
-          <button class="wl-tab ${currentTab === "goals-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="goals-manage">목표 관리</button>
+          <button class="wl-tab ${currentTab === "log" ? "is-active" : ""}" data-action="switchTab" data-tab="log">기록</button>
+          <button class="wl-tab ${currentTab === "works-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="works-manage">할일</button>
+          <button class="wl-tab ${currentTab === "works-done" ? "is-active" : ""}" data-action="switchTab" data-tab="works-done">작품</button>
+          <button class="wl-tab ${currentTab === "goals-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="goals-manage">목표</button>
         </nav>
       </header>
       <div id="wl-save-status" class="wl-savebar"></div>
       ${floatingTimerNote ? `<div class="wl-savebar wl-savebar--error">${escapeHtml(floatingTimerNote)}</div>` : ""}
       ${currentTab === "dashboard" ? renderDashboard()
+        : currentTab === "log" ? renderLogView()
         : currentTab === "works-manage" ? renderWorksManage()
         : currentTab === "works-done" ? renderWorksDone()
         : renderGoalsManage()}
@@ -3029,8 +3033,6 @@ function setLogScale(scale) {
   logAnchor = null; // 눈금을 바꾸면 이번 주/이번 달로 돌아옵니다
   render();
 }
-function openLogView() { logOpen = true; logScale = "week"; logAnchor = null; goalPickerOpen = false; render(); }
-function closeLogView() { logOpen = false; render(); }
 
 // 단일 계열 막대. 축이 하나뿐이라 범례가 필요 없고, 제목이 무엇인지 말해줍니다.
 function renderLogBars(items, unitLabel) {
@@ -3163,7 +3165,7 @@ function renderPeriodGoals(scale, isCurrent) {
   const unit = scale === "month" ? "이번 달" : "이번 주";
   const carry = isCurrent && total === 0 ? unmetLastPeriod(scale) : [];
   return `
-    <div class="wl-settings-block">
+    <section class="wl-card">
       <div class="wl-work-head">
         <div class="wl-card-title" style="margin-bottom:0">${isCurrent ? unit : (scale === "month" ? "그 달" : "그 주")} 목표${total > 0 ? ` <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>` : ""}</div>
         ${isCurrent ? `<button class="wl-cost-toggle" data-action="toggleGoalPicker">${goalPickerOpen ? "닫기" : (total > 0 ? "고치기" : "고르기")}</button>` : ""}
@@ -3182,7 +3184,7 @@ function renderPeriodGoals(scale, isCurrent) {
           ${ICONS.plus} 지난 ${scale === "month" ? "달" : "주"} 미달성 ${carry.length}개 다시 넣기
         </button>` : ""}
       ${isCurrent && goalPickerOpen ? renderGoalPicker(scale) : ""}
-    </div>`;
+    </section>`;
 }
 
 function renderLogView() {
@@ -3220,12 +3222,8 @@ function renderLogView() {
   const workMax = works.length ? works[0][1] : 0;
 
   return `
-    <div class="wl-settings-overlay" data-action="closeLogViewBackdrop">
-      <div class="wl-settings-panel wl-logpanel">
-        <div class="wl-work-head">
-          <div class="wl-settings-title" style="margin:0">기록</div>
-          <button class="wl-icon-btn" data-action="closeLogView">${ICONS.x}</button>
-        </div>
+    <div class="wl-body wl-logbody">
+      <section class="wl-card">
         <div class="wl-log-scale">
           <button class="wl-tab ${!isMonth ? "is-active" : ""}" data-action="setLogScale" data-scale="week">주간</button>
           <button class="wl-tab ${isMonth ? "is-active" : ""}" data-action="setLogScale" data-scale="month">월간</button>
@@ -3235,8 +3233,6 @@ function renderLogView() {
           <span class="wl-log-period">${escapeHtml(title)}</span>
           <button class="wl-icon-btn" data-action="shiftLog" data-dir="1"${to >= new Date() ? " disabled" : ""}>${ICONS.chevron}</button>
         </div>
-
-        ${renderPeriodGoals(logScale, isCurrentPeriod)}
 
         <div class="wl-ledger-strip">
           <div class="wl-figure"><div class="wl-figure-label">적립</div><div class="wl-figure-value is-work">${sum.points}</div></div>
@@ -3251,14 +3247,17 @@ function renderLogView() {
           const diff = sum.points - avg;
           return `<div class="wl-hint" style="margin-top:8px">지난 4주 평균 <b>${avg}점</b>${diff === 0 ? " · 같은 페이스" : ` · ${diff > 0 ? "+" : ""}${diff}점`}</div>`;
         })()}
+      </section>
 
-        <div class="wl-settings-block">
-          <div class="wl-card-title">${isMonth ? "주별 작업 시간" : "일별 작업 시간"}</div>
-          ${bars}
-        </div>
+      ${renderPeriodGoals(logScale, isCurrentPeriod)}
 
-        <div class="wl-settings-block">
-          <div class="wl-card-title">프로젝트별 시간</div>
+      <section class="wl-card">
+        <div class="wl-card-title">${isMonth ? "주별 작업 시간" : "일별 작업 시간"}</div>
+        ${bars}
+      </section>
+
+      <section class="wl-card">
+        <div class="wl-card-title">프로젝트별 시간</div>
           ${works.length === 0 ? `<div class="wl-empty">이 기간에는 기록이 없어요.</div>` : `
             <div class="wl-logbars">
               ${works.map(([id, mins]) => `
@@ -3268,11 +3267,11 @@ function renderLogView() {
                   <span class="wl-logbar-value">${formatMinutes(mins)}</span>
                 </div>`).join("")}
             </div>`}
-        </div>
+      </section>
 
-        ${isMonth ? "" : `
-          <div class="wl-settings-block">
-            <div class="wl-card-title">블록</div>
+      ${isMonth ? "" : `
+        <section class="wl-card">
+          <div class="wl-card-title">블록</div>
             ${keys.every((k) => (state.blocksByDate[k] || []).length === 0)
               ? `<div class="wl-empty">이 주에는 기록이 없어요.</div>`
               : keys.map((k) => {
@@ -3284,8 +3283,7 @@ function renderLogView() {
                       <ul class="wl-log">${rows.map(renderBlockLogRow).join("")}</ul>
                     </div>`;
                 }).join("")}
-          </div>`}
-      </div>
+        </section>`}
     </div>`;
 }
 
@@ -3360,7 +3358,6 @@ function render() {
   root.innerHTML = html;
   renderedDay = todayKey();
   if (state) syncTimerWindow();
-  if (logOpen) root.insertAdjacentHTML("beforeend", renderLogView());
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   if (prevScrollLeft) {
@@ -3377,8 +3374,6 @@ function runAction(name, ds) {
     case "togglePauseSession": togglePauseSession(); break;
     case "rateSession": rateSession(ds.rating); break;
     case "undoCancelBlock": undoCancelBlock(); break;
-    case "openLogView": openLogView(); break;
-    case "closeLogView": closeLogView(); break;
     case "setLogScale": setLogScale(ds.scale); break;
     case "toggleGoalPicker": toggleGoalPicker(); break;
     case "toggleGoalPick": toggleGoalPick(ds.scale, ds.pick); break;
