@@ -196,6 +196,8 @@ function defaultState() {
     activeSpend: null,
     cancelledBlock: null,
     payoutRate: DEFAULT_PAYOUT_RATE,
+    weeklyGoals: {},   // { "2026-09-07"(월요일): ["workId:subtaskId", ...] }
+    monthlyGoals: {},  // { "2026-09": ["workId", ...] }
     goalRate: DEFAULT_GOAL_RATE,
     avgWorkPrice: DEFAULT_AVG_WORK_PRICE,
     queue: [],
@@ -240,6 +242,8 @@ function normalizeState(s) {
   }
   s.works.forEach((w) => { w.wip = w.wip === true; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
+  s.weeklyGoals = s.weeklyGoals || {};
+  s.monthlyGoals = s.monthlyGoals || {};
   if (typeof s.goalRate !== "number" || !(s.goalRate > 0)) s.goalRate = DEFAULT_GOAL_RATE;
   if (typeof s.avgWorkPrice !== "number" || !(s.avgWorkPrice > 0)) s.avgWorkPrice = DEFAULT_AVG_WORK_PRICE;
   // 목표 금액은 실제 가격에서 파생되는 값이라 저장본과 어긋날 수 없게 매번 맞춥니다.
@@ -285,7 +289,8 @@ let renderedDay = null;
 let resetConfirm = null;
 let logOpen = false;
 let logScale = "week"; // week | month
-let logAnchor = null;  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
+let logAnchor = null;
+let goalPickerOpen = false;  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
 let switchFormOpen = false;
 let manualBlockOpen = false;
 let floatingTimerOn = false;
@@ -2016,7 +2021,10 @@ function renderProjectsStatusColumn() {
   const none = wip.length === 0 && backlog.length === 0;
   return `
     <div class="wl-work-head wl-col-head">
-      <div class="wl-card-title" style="margin-bottom:0">진행 중 <span class="wl-wip-count ${wip.length >= WIP_LIMIT ? "is-full" : ""}">${wip.length}/${WIP_LIMIT}</span></div>
+      <div class="wl-card-title" style="margin-bottom:0">진행 중 <span class="wl-wip-count ${wip.length >= WIP_LIMIT ? "is-full" : ""}">${wip.length}/${WIP_LIMIT}</span>${(() => {
+        const g = goalProgress("week", new Date());
+        return g.total > 0 ? ` · 이번 주 <span class="wl-wip-count ${g.done === g.total ? "is-full" : ""}">${g.done}/${g.total}</span>` : "";
+      })()}</div>
       <button class="wl-icon-btn" data-action="switchTab" data-tab="works-manage">${ICONS.plus}</button>
     </div>
     ${none ? `<section class="wl-card"><div class="wl-empty wl-empty--pad">아직 할일이 없어요. '할일 관리'에서 추가해보세요.</div></section>` : ""}
@@ -3011,15 +3019,17 @@ function summarize(keys) {
 function shiftLog(dir) {
   const base = logAnchor ? dateFromKey(logAnchor) : new Date();
   const next = logScale === "month" ? addMonths(base, dir) : addDays(base, dir * 7);
+  goalPickerOpen = false;
   logAnchor = todayKey(next);
   render();
 }
 function setLogScale(scale) {
+  goalPickerOpen = false;
   logScale = scale;
   logAnchor = null; // 눈금을 바꾸면 이번 주/이번 달로 돌아옵니다
   render();
 }
-function openLogView() { logOpen = true; logScale = "week"; logAnchor = null; render(); }
+function openLogView() { logOpen = true; logScale = "week"; logAnchor = null; goalPickerOpen = false; render(); }
 function closeLogView() { logOpen = false; render(); }
 
 // 단일 계열 막대. 축이 하나뿐이라 범례가 필요 없고, 제목이 무엇인지 말해줍니다.
@@ -3038,12 +3048,150 @@ function renderLogBars(items, unitLabel) {
         </div>`).join("")}
     </div>`;
 }
+
+// ---- 주간 / 월간 목표 ----
+// 수량 목표가 아니라 "이번 주엔 여기까지" 라는 범위 약속입니다. 새로 적는 게
+// 아니라 이미 있는 하위 할일(주간)과 작품(월간) 중에서 고르는 것이고, 달성
+// 여부는 저장하지 않습니다 — 원래 쓰던 체크박스에서 그때그때 읽습니다.
+// 그래야 같은 걸 두 군데서 관리하지 않게 됩니다.
+const GOAL_PICK_MAX = 5;
+function weekKeyOf(d) { return todayKey(startOfWeek(d)); }
+function monthKeyOf(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; }
+function goalBucket(scale, date) {
+  return scale === "month" ? state.monthlyGoals : state.weeklyGoals;
+}
+function goalKeyFor(scale, date) {
+  return scale === "month" ? monthKeyOf(date) : weekKeyOf(date);
+}
+function goalPicks(scale, date) {
+  return goalBucket(scale)[goalKeyFor(scale, date)] || [];
+}
+// 고른 항목 하나를 풀어 이름과 달성 여부를 알아냅니다. 대상이 지워졌으면 null.
+function resolveGoalPick(scale, pick) {
+  if (scale === "month") {
+    const w = state.works.find((x) => x.id === pick);
+    if (!w) return null;
+    return { label: w.name, sub: "완성", done: !!w.completed };
+  }
+  const [workId, subId] = pick.split(":");
+  const w = state.works.find((x) => x.id === workId);
+  const st = w && (w.subtasks || []).find((x) => x.id === subId);
+  if (!w || !st) return null;
+  return { label: w.name, sub: st.name, done: !!st.done };
+}
+function goalProgress(scale, date) {
+  const items = goalPicks(scale, date).map((p) => resolveGoalPick(scale, p)).filter(Boolean);
+  return { total: items.length, done: items.filter((i) => i.done).length, items };
+}
+function toggleGoalPick(scale, pick) {
+  const key = goalKeyFor(scale, new Date());
+  const bucket = goalBucket(scale);
+  const list = bucket[key] || [];
+  if (list.includes(pick)) bucket[key] = list.filter((x) => x !== pick);
+  else {
+    if (list.length >= GOAL_PICK_MAX) return;
+    bucket[key] = [...list, pick];
+  }
+  if (bucket[key].length === 0) delete bucket[key];
+  persistAndRender();
+}
+function toggleGoalPicker() { goalPickerOpen = !goalPickerOpen; render(); }
+// 지난 기간에 못 지킨 것들. 새 기간은 빈 목록으로 시작하되, 다시 넣기는
+// 한 번에 되게 해둡니다 — 자동 이월은 몇 주째 남는 죽은 목록이 됩니다.
+function unmetLastPeriod(scale) {
+  const prev = scale === "month" ? addMonths(new Date(), -1) : addDays(new Date(), -7);
+  return goalProgress(scale, prev).items.filter((i) => !i.done);
+}
+function carryOverGoals(scale) {
+  const prev = scale === "month" ? addMonths(new Date(), -1) : addDays(new Date(), -7);
+  const keep = goalPicks(scale, prev).filter((p) => {
+    const r = resolveGoalPick(scale, p);
+    return r && !r.done;
+  });
+  if (keep.length === 0) return;
+  goalBucket(scale)[goalKeyFor(scale, new Date())] = keep.slice(0, GOAL_PICK_MAX);
+  persistAndRender();
+}
+// 최근 4주(이번 주 제외) 평균 적립 — 목표를 정하지 않아도 페이스가 보입니다.
+function recentWeeklyAverage() {
+  const weeks = [];
+  for (let i = 1; i <= 4; i++) {
+    const from = startOfWeek(addDays(new Date(), -7 * i));
+    const keys = keysBetween(from, addDays(from, 6));
+    if (keys.some((k) => (state.blocksByDate[k] || []).length > 0)) {
+      weeks.push(summarize(keys).points);
+    }
+  }
+  if (weeks.length === 0) return null;
+  return Math.round(weeks.reduce((a, x) => a + x, 0) / weeks.length);
+}
+
+
+function renderGoalPicker(scale) {
+  const picks = goalPicks(scale, new Date());
+  const works = state.works.filter((w) => !w.archived);
+  // 월간은 작품 하나가 곧 한 줄이라 묶음 머리가 필요 없고, 줄에 작품 이름이
+  // 와야 무엇을 고르는지 보입니다. 주간은 프로젝트로 묶고 줄엔 하위 할일 이름.
+  const rows = scale === "month"
+    ? works.filter((w) => !w.completed).map((w) => ({ pick: w.id, group: null, name: w.name }))
+    : works.flatMap((w) => (w.subtasks || []).filter((st) => !st.done)
+        .map((st) => ({ pick: `${w.id}:${st.id}`, group: w.name, name: st.name })));
+  if (rows.length === 0) {
+    return `<div class="wl-empty">고를 ${scale === "month" ? "작품" : "하위 할일"}이 없어요.</div>`;
+  }
+  let lastLabel = null;
+  return `
+    <div class="wl-goalpick">
+      <div class="wl-hint">${picks.length}개 선택됨 · 최대 ${GOAL_PICK_MAX}개</div>
+      ${rows.map((r) => {
+        const head = r.group && r.group !== lastLabel ? `<div class="wl-goalpick-work">${escapeHtml(r.group)}</div>` : "";
+        lastLabel = r.group;
+        const on = picks.includes(r.pick);
+        const full = !on && picks.length >= GOAL_PICK_MAX;
+        return `${head}
+          <button class="wl-goalpick-row ${on ? "is-on" : ""}" data-action="toggleGoalPick" data-scale="${scale}" data-pick="${escapeAttr(r.pick)}"${full ? " disabled" : ""}>
+            <span class="wl-checkbox ${on ? "is-done" : ""}">${on ? ICONS.check : ""}</span>
+            <span class="wl-goalpick-name">${escapeHtml(r.name)}</span>
+          </button>`;
+      }).join("")}
+    </div>`;
+}
+// 지난 기간은 결과만 보여줍니다 — 지나간 주의 약속을 고쳐 쓸 일은 없으니까요.
+function renderPeriodGoals(scale, isCurrent) {
+  const when = logAnchor ? dateFromKey(logAnchor) : new Date();
+  const { total, done, items } = goalProgress(scale, when);
+  const unit = scale === "month" ? "이번 달" : "이번 주";
+  const carry = isCurrent && total === 0 ? unmetLastPeriod(scale) : [];
+  return `
+    <div class="wl-settings-block">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">${isCurrent ? unit : (scale === "month" ? "그 달" : "그 주")} 목표${total > 0 ? ` <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>` : ""}</div>
+        ${isCurrent ? `<button class="wl-cost-toggle" data-action="toggleGoalPicker">${goalPickerOpen ? "닫기" : (total > 0 ? "고치기" : "고르기")}</button>` : ""}
+      </div>
+      ${total === 0 && !goalPickerOpen
+        ? `<div class="wl-empty">${isCurrent ? "아직 정하지 않았어요." : "정해둔 목표가 없었어요."}</div>`
+        : `<ul class="wl-goal-list">
+            ${items.map((i) => `
+              <li class="wl-goal-item ${i.done ? "is-done" : ""}">
+                <span class="wl-checkbox ${i.done ? "is-done" : ""}">${i.done ? ICONS.check : ""}</span>
+                <span class="wl-goal-item-text">${escapeHtml(i.label)} · <b>${escapeHtml(i.sub)}</b></span>
+              </li>`).join("")}
+          </ul>`}
+      ${carry.length > 0 ? `
+        <button class="wl-cost-toggle" data-action="carryOverGoals" data-scale="${scale}">
+          ${ICONS.plus} 지난 ${scale === "month" ? "달" : "주"} 미달성 ${carry.length}개 다시 넣기
+        </button>` : ""}
+      ${isCurrent && goalPickerOpen ? renderGoalPicker(scale) : ""}
+    </div>`;
+}
+
 function renderLogView() {
   const { from, to, title } = logRange();
   const keys = keysBetween(from, to);
   const sum = summarize(keys);
   const today = todayKey();
   const isMonth = logScale === "month";
+  const isCurrentPeriod = goalKeyFor(logScale, from) === goalKeyFor(logScale, new Date());
 
   // 주간은 하루씩, 월간은 주 단위로 묶습니다 — 31개 막대는 읽히지 않습니다.
   let bars;
@@ -3088,12 +3236,21 @@ function renderLogView() {
           <button class="wl-icon-btn" data-action="shiftLog" data-dir="1"${to >= new Date() ? " disabled" : ""}>${ICONS.chevron}</button>
         </div>
 
+        ${renderPeriodGoals(logScale, isCurrentPeriod)}
+
         <div class="wl-ledger-strip">
           <div class="wl-figure"><div class="wl-figure-label">적립</div><div class="wl-figure-value is-work">${sum.points}</div></div>
           <div class="wl-figure"><div class="wl-figure-label">사용</div><div class="wl-figure-value is-spend">${sum.spent}</div></div>
           <div class="wl-figure"><div class="wl-figure-label">작업</div><div class="wl-figure-value">${formatMinutes(sum.minutes)}</div></div>
           <div class="wl-figure"><div class="wl-figure-label">블록</div><div class="wl-figure-value">${sum.blocks}</div></div>
         </div>
+        ${(() => {
+          if (isMonth) return "";
+          const avg = recentWeeklyAverage();
+          if (avg == null) return `<div class="wl-hint" style="margin-top:8px">몇 주 쌓이면 지난 평균과 비교해서 보여줄게요.</div>`;
+          const diff = sum.points - avg;
+          return `<div class="wl-hint" style="margin-top:8px">지난 4주 평균 <b>${avg}점</b>${diff === 0 ? " · 같은 페이스" : ` · ${diff > 0 ? "+" : ""}${diff}점`}</div>`;
+        })()}
 
         <div class="wl-settings-block">
           <div class="wl-card-title">${isMonth ? "주별 작업 시간" : "일별 작업 시간"}</div>
@@ -3223,6 +3380,9 @@ function runAction(name, ds) {
     case "openLogView": openLogView(); break;
     case "closeLogView": closeLogView(); break;
     case "setLogScale": setLogScale(ds.scale); break;
+    case "toggleGoalPicker": toggleGoalPicker(); break;
+    case "toggleGoalPick": toggleGoalPick(ds.scale, ds.pick); break;
+    case "carryOverGoals": carryOverGoals(ds.scale); break;
     case "shiftLog": shiftLog(Number(ds.dir)); break;
     case "toggleManualBlockForm": toggleManualBlockForm(); break;
     case "addManualBlock": addManualBlock(); break;
