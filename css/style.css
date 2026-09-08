@@ -594,3 +594,19 @@ body {
 .wl-log-day .wl-log { margin-top: 4px; }
 /* 4칸 안에 "3시간 50분"이 들어가야 해서 이 패널에서만 값 글자를 줄입니다. */
 .wl-logpanel .wl-figure-value { font-size: 14px; }
+
+/* 주간·월간 목표. 고르는 목록과 정해진 목록이 같은 체크 모양을 쓰되,
+   정해진 쪽은 읽기 전용이라 버튼이 아닙니다. */
+.wl-goal-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wl-goal-item { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.wl-goal-item.is-done .wl-goal-item-text { color: var(--wl-text-muted); text-decoration: line-through; }
+.wl-goal-item-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-goalpick { margin-top: 10px; border-top: 1px solid var(--wl-border); padding-top: 10px; }
+.wl-goalpick-work { font-size: 11px; color: var(--wl-text-muted); margin: 10px 0 4px; }
+.wl-goalpick-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; color: var(--wl-text); font: inherit; font-size: 13px;
+  padding: 6px 0; cursor: pointer;
+}
+.wl-goalpick-row[disabled] { opacity: .35; cursor: not-allowed; }
+.wl-goalpick-row.is-on .wl-goalpick-name { color: var(--wl-work); }
