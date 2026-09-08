@@ -572,3 +572,25 @@ body {
 .wl-settings-block { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--wl-border); }
 .wl-settings-block .wl-field-row { margin-top: 8px; }
 .wl-sale .wl-btn[disabled] { opacity: .4; cursor: not-allowed; }
+
+/* 기록 보기(주별·월별). 막대는 계열이 하나뿐이라 범례가 없고, 제목이 무엇을
+   재는지 말해줍니다. 데이터 끝만 둥글게 두고 축 쪽은 각지게 붙여둡니다. */
+.wl-logpanel { max-width: 520px; }
+.wl-log-scale { display: flex; gap: 4px; margin: 14px 0 4px; border-bottom: 1px solid var(--wl-border); }
+.wl-log-nav { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 14px; }
+.wl-log-period { font-size: 13px; font-family: 'IBM Plex Mono', monospace; }
+.wl-log-nav .wl-icon-btn:first-child { transform: rotate(180deg); }
+.wl-log-nav .wl-icon-btn[disabled] { opacity: .25; cursor: not-allowed; }
+.wl-logbars { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.wl-logbar { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.wl-logbar-label { flex: 0 0 46px; color: var(--wl-text-muted); font-family: 'IBM Plex Mono', monospace; }
+.wl-logbar-label.is-wide { flex: 0 0 96px; font-family: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-logbar-track { flex: 1; height: 10px; background: var(--wl-surface-2); border-radius: 2px; overflow: hidden; }
+.wl-logbar-fill { display: block; height: 100%; background: var(--wl-work); border-radius: 0 4px 4px 0; }
+.wl-logbar-value { flex: 0 0 58px; text-align: right; color: var(--wl-text-muted); font-family: 'IBM Plex Mono', monospace; }
+.wl-logbar.is-today .wl-logbar-label,
+.wl-logbar.is-today .wl-logbar-value { color: var(--wl-text); }
+.wl-log-day { margin-top: 12px; }
+.wl-log-day .wl-log { margin-top: 4px; }
+/* 4칸 안에 "3시간 50분"이 들어가야 해서 이 패널에서만 값 글자를 줄입니다. */
+.wl-logpanel .wl-figure-value { font-size: 14px; }

@@ -283,6 +283,9 @@ let spendPresetsEditOpen = false;
 let notifiedKey = null;
 let renderedDay = null;
 let resetConfirm = null;
+let logOpen = false;
+let logScale = "week"; // week | month
+let logAnchor = null;  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
 let switchFormOpen = false;
 let manualBlockOpen = false;
 let floatingTimerOn = false;
@@ -2113,7 +2116,10 @@ function renderTodaySummaryColumn() {
     <section class="wl-card">
       <div class="wl-work-head">
         <div class="wl-card-title" style="margin-bottom:0">오늘의 기록</div>
-        <button class="wl-icon-btn" data-action="toggleManualBlockForm" title="세션 없이 한 일 기록">${manualBlockOpen ? ICONS.x : ICONS.plus}</button>
+        <div>
+          <button class="wl-icon-btn" data-action="openLogView" title="주별 · 월별 기록">${ICONS.archive}</button>
+          <button class="wl-icon-btn" data-action="toggleManualBlockForm" title="세션 없이 한 일 기록">${manualBlockOpen ? ICONS.x : ICONS.plus}</button>
+        </div>
       </div>
       ${manualBlockOpen ? renderManualBlockForm() : ""}
       ${todayBlocks.length === 0 && todaySpends.length === 0 ? `<div class="wl-empty">아직 기록이 없어요.</div>` : ""}
@@ -2948,6 +2954,184 @@ function renderResetSection() {
     </div>`;
 }
 
+
+// ---- 기록 보기: 주별 / 월별 ----
+// 대시보드는 "오늘"만 다루고, 지난 기록은 이 오버레이에서 봅니다.
+function dateFromKey(k) {
+  const [y, m, d] = k.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+// 주는 월요일 시작.
+function startOfWeek(d) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function addMonths(d, n) { const x = new Date(d); x.setDate(1); x.setMonth(x.getMonth() + n); return x; }
+// 지금 보고 있는 기간의 시작/끝(포함)과 제목.
+function logRange() {
+  const base = logAnchor ? dateFromKey(logAnchor) : new Date();
+  if (logScale === "month") {
+    const from = new Date(base.getFullYear(), base.getMonth(), 1);
+    const to = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+    return { from, to, title: `${from.getFullYear()}년 ${from.getMonth() + 1}월` };
+  }
+  const from = startOfWeek(base);
+  const to = addDays(from, 6);
+  const label = `${from.getMonth() + 1}.${from.getDate()} – ${to.getMonth() + 1}.${to.getDate()}`;
+  return { from, to, title: label };
+}
+function keysBetween(from, to) {
+  const out = [];
+  for (let d = new Date(from); d <= to; d = addDays(d, 1)) out.push(todayKey(d));
+  return out;
+}
+// 한 기간의 합계. 프로젝트별 시간은 세그먼트 단위로 나눠 담습니다.
+function summarize(keys) {
+  let points = 0, spent = 0, minutes = 0, blocks = 0;
+  const byWork = {};
+  keys.forEach((k) => {
+    (state.blocksByDate[k] || []).forEach((b) => {
+      points += blockPoints(b);
+      const mins = blockMinutes(b);
+      if (mins > 0) blocks += 1;
+      minutes += mins;
+      blockSegments(b).forEach((sg) => {
+        if (!(sg.minutes > 0)) return;
+        const id = sg.workId || "__none";
+        byWork[id] = (byWork[id] || 0) + sg.minutes;
+      });
+    });
+    (state.spendsByDate[k] || []).forEach((sp) => { spent += sp.cost; });
+  });
+  return { points, spent, minutes, blocks, byWork };
+}
+function shiftLog(dir) {
+  const base = logAnchor ? dateFromKey(logAnchor) : new Date();
+  const next = logScale === "month" ? addMonths(base, dir) : addDays(base, dir * 7);
+  logAnchor = todayKey(next);
+  render();
+}
+function setLogScale(scale) {
+  logScale = scale;
+  logAnchor = null; // 눈금을 바꾸면 이번 주/이번 달로 돌아옵니다
+  render();
+}
+function openLogView() { logOpen = true; logScale = "week"; logAnchor = null; render(); }
+function closeLogView() { logOpen = false; render(); }
+
+// 단일 계열 막대. 축이 하나뿐이라 범례가 필요 없고, 제목이 무엇인지 말해줍니다.
+function renderLogBars(items, unitLabel) {
+  const max = items.reduce((a, x) => Math.max(a, x.value), 0);
+  if (max <= 0) return `<div class="wl-empty">이 기간에는 기록이 없어요.</div>`;
+  return `
+    <div class="wl-logbars">
+      ${items.map((it) => `
+        <div class="wl-logbar ${it.today ? "is-today" : ""}">
+          <span class="wl-logbar-label">${escapeHtml(it.label)}</span>
+          <span class="wl-logbar-track">
+            <span class="wl-logbar-fill" style="width:${Math.round((it.value / max) * 100)}%"></span>
+          </span>
+          <span class="wl-logbar-value">${it.value > 0 ? `${it.value}${unitLabel}` : ""}</span>
+        </div>`).join("")}
+    </div>`;
+}
+function renderLogView() {
+  const { from, to, title } = logRange();
+  const keys = keysBetween(from, to);
+  const sum = summarize(keys);
+  const today = todayKey();
+  const isMonth = logScale === "month";
+
+  // 주간은 하루씩, 월간은 주 단위로 묶습니다 — 31개 막대는 읽히지 않습니다.
+  let bars;
+  if (isMonth) {
+    const weeks = [];
+    for (let d = startOfWeek(from); d <= to; d = addDays(d, 7)) {
+      const wk = keysBetween(d, addDays(d, 6)).filter((k) => keys.includes(k));
+      if (wk.length === 0) continue;
+      // 그 주에서 이 달에 속하는 부분만 라벨에 씁니다 — 8월을 보는데 7.27이
+      // 적혀 있으면 어느 달을 재고 있는지 헷갈립니다.
+      const head = dateFromKey(wk[0]);
+      const s = summarize(wk);
+      weeks.push({ label: `${head.getMonth() + 1}.${head.getDate()}~`, value: Math.round(s.minutes / 60 * 10) / 10, today: wk.includes(today) });
+    }
+    bars = renderLogBars(weeks, "시간");
+  } else {
+    const names = ["월", "화", "수", "목", "금", "토", "일"];
+    bars = renderLogBars(keys.map((k, i) => ({
+      label: `${names[i]} ${dateFromKey(k).getDate()}`,
+      value: summarize([k]).minutes,
+      today: k === today,
+    })), "분");
+  }
+
+  const works = Object.entries(sum.byWork).sort((a, b) => b[1] - a[1]);
+  const workMax = works.length ? works[0][1] : 0;
+
+  return `
+    <div class="wl-settings-overlay" data-action="closeLogViewBackdrop">
+      <div class="wl-settings-panel wl-logpanel">
+        <div class="wl-work-head">
+          <div class="wl-settings-title" style="margin:0">기록</div>
+          <button class="wl-icon-btn" data-action="closeLogView">${ICONS.x}</button>
+        </div>
+        <div class="wl-log-scale">
+          <button class="wl-tab ${!isMonth ? "is-active" : ""}" data-action="setLogScale" data-scale="week">주간</button>
+          <button class="wl-tab ${isMonth ? "is-active" : ""}" data-action="setLogScale" data-scale="month">월간</button>
+        </div>
+        <div class="wl-log-nav">
+          <button class="wl-icon-btn" data-action="shiftLog" data-dir="-1">${ICONS.chevron}</button>
+          <span class="wl-log-period">${escapeHtml(title)}</span>
+          <button class="wl-icon-btn" data-action="shiftLog" data-dir="1"${to >= new Date() ? " disabled" : ""}>${ICONS.chevron}</button>
+        </div>
+
+        <div class="wl-ledger-strip">
+          <div class="wl-figure"><div class="wl-figure-label">적립</div><div class="wl-figure-value is-work">${sum.points}</div></div>
+          <div class="wl-figure"><div class="wl-figure-label">사용</div><div class="wl-figure-value is-spend">${sum.spent}</div></div>
+          <div class="wl-figure"><div class="wl-figure-label">작업</div><div class="wl-figure-value">${formatMinutes(sum.minutes)}</div></div>
+          <div class="wl-figure"><div class="wl-figure-label">블록</div><div class="wl-figure-value">${sum.blocks}</div></div>
+        </div>
+
+        <div class="wl-settings-block">
+          <div class="wl-card-title">${isMonth ? "주별 작업 시간" : "일별 작업 시간"}</div>
+          ${bars}
+        </div>
+
+        <div class="wl-settings-block">
+          <div class="wl-card-title">프로젝트별 시간</div>
+          ${works.length === 0 ? `<div class="wl-empty">이 기간에는 기록이 없어요.</div>` : `
+            <div class="wl-logbars">
+              ${works.map(([id, mins]) => `
+                <div class="wl-logbar">
+                  <span class="wl-logbar-label is-wide">${escapeHtml(id === "__none" ? "연결 없음" : workName(id))}</span>
+                  <span class="wl-logbar-track"><span class="wl-logbar-fill" style="width:${Math.round((mins / workMax) * 100)}%"></span></span>
+                  <span class="wl-logbar-value">${formatMinutes(mins)}</span>
+                </div>`).join("")}
+            </div>`}
+        </div>
+
+        ${isMonth ? "" : `
+          <div class="wl-settings-block">
+            <div class="wl-card-title">블록</div>
+            ${keys.every((k) => (state.blocksByDate[k] || []).length === 0)
+              ? `<div class="wl-empty">이 주에는 기록이 없어요.</div>`
+              : keys.map((k) => {
+                  const rows = (state.blocksByDate[k] || []).filter((b) => blockMinutes(b) > 0);
+                  if (rows.length === 0) return "";
+                  return `
+                    <div class="wl-log-day">
+                      <div class="wl-hint">${escapeHtml(formatKDate(dateFromKey(k)))}</div>
+                      <ul class="wl-log">${rows.map(renderBlockLogRow).join("")}</ul>
+                    </div>`;
+                }).join("")}
+          </div>`}
+      </div>
+    </div>`;
+}
+
 function renderSettingsOverlay() {
   const s = drafts.settings || getCredentials();
   const canClose = hasCredentials();
@@ -3019,6 +3203,7 @@ function render() {
   root.innerHTML = html;
   renderedDay = todayKey();
   if (state) syncTimerWindow();
+  if (logOpen) root.insertAdjacentHTML("beforeend", renderLogView());
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   if (prevScrollLeft) {
@@ -3035,6 +3220,10 @@ function runAction(name, ds) {
     case "togglePauseSession": togglePauseSession(); break;
     case "rateSession": rateSession(ds.rating); break;
     case "undoCancelBlock": undoCancelBlock(); break;
+    case "openLogView": openLogView(); break;
+    case "closeLogView": closeLogView(); break;
+    case "setLogScale": setLogScale(ds.scale); break;
+    case "shiftLog": shiftLog(Number(ds.dir)); break;
     case "toggleManualBlockForm": toggleManualBlockForm(); break;
     case "addManualBlock": addManualBlock(); break;
     case "removeBlock": removeBlock(ds.block); break;
