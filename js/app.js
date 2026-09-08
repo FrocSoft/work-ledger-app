@@ -1961,9 +1961,31 @@ function renderCancelUndo() {
     </div>`;
 }
 
+// 다음에 뭘 할지 정하는 자리 바로 위에 이번 주 약속을 둡니다 — 안 보이는
+// 약속은 행동을 이끌지 못합니다. 정해둔 게 없으면 아예 나오지 않습니다.
+function renderWeeklyGoalCard() {
+  const { total, done, items } = goalProgress("week", new Date());
+  if (total === 0) return "";
+  return `
+    <section class="wl-card">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">이번 주 목표 <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>${done === total ? ` <span class="wl-goal-next-badge">달성</span>` : ""}</div>
+        <button class="wl-cost-toggle" data-action="switchTab" data-tab="log">기록에서 고치기</button>
+      </div>
+      <ul class="wl-goal-list">
+        ${items.map((i) => `
+          <li class="wl-goal-item ${i.done ? "is-done" : ""}">
+            <span class="wl-checkbox ${i.done ? "is-done" : ""}">${i.done ? ICONS.check : ""}</span>
+            <span class="wl-goal-item-text">${escapeHtml(i.label)} · <b>${escapeHtml(i.sub)}</b></span>
+          </li>`).join("")}
+      </ul>
+    </section>`;
+}
+
 function renderTimeBlockColumn() {
   const active = state.activeBlock;
   return `
+    ${renderWeeklyGoalCard()}
     <section class="wl-card">
       ${active
         ? renderTimerBlock({
@@ -3085,13 +3107,22 @@ function goalProgress(scale, date) {
   const items = goalPicks(scale, date).map((p) => resolveGoalPick(scale, p)).filter(Boolean);
   return { total: items.length, done: items.filter((i) => i.done).length, items };
 }
+// 한도는 "아직 안 끝낸 것"만 셉니다. 끝낸 것까지 세면 화요일에 다섯 개를
+// 마쳤을 때 남은 닷새 동안 아무것도 더 못 넣게 되고, 목표가 하한이 아니라
+// 상한으로 작동합니다.
+function openPickCount(scale, list) {
+  return list.filter((p) => {
+    const r = resolveGoalPick(scale, p);
+    return r && !r.done;
+  }).length;
+}
 function toggleGoalPick(scale, pick) {
   const key = goalKeyFor(scale, new Date());
   const bucket = goalBucket(scale);
   const list = bucket[key] || [];
   if (list.includes(pick)) bucket[key] = list.filter((x) => x !== pick);
   else {
-    if (list.length >= GOAL_PICK_MAX) return;
+    if (openPickCount(scale, list) >= GOAL_PICK_MAX) return;
     bucket[key] = [...list, pick];
   }
   if (bucket[key].length === 0) delete bucket[key];
@@ -3144,12 +3175,12 @@ function renderGoalPicker(scale) {
   let lastLabel = null;
   return `
     <div class="wl-goalpick">
-      <div class="wl-hint">${picks.length}개 선택됨 · 최대 ${GOAL_PICK_MAX}개</div>
+      <div class="wl-hint">진행 중 ${openPickCount(scale, picks)}개 · 한 번에 ${GOAL_PICK_MAX}개까지 (끝낸 건 안 셈)</div>
       ${rows.map((r) => {
         const head = r.group && r.group !== lastLabel ? `<div class="wl-goalpick-work">${escapeHtml(r.group)}</div>` : "";
         lastLabel = r.group;
         const on = picks.includes(r.pick);
-        const full = !on && picks.length >= GOAL_PICK_MAX;
+        const full = !on && openPickCount(scale, picks) >= GOAL_PICK_MAX;
         return `${head}
           <button class="wl-goalpick-row ${on ? "is-on" : ""}" data-action="toggleGoalPick" data-scale="${scale}" data-pick="${escapeAttr(r.pick)}"${full ? " disabled" : ""}>
             <span class="wl-checkbox ${on ? "is-done" : ""}">${on ? ICONS.check : ""}</span>
@@ -3167,11 +3198,12 @@ function renderPeriodGoals(scale, isCurrent) {
   return `
     <section class="wl-card">
       <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">${isCurrent ? unit : (scale === "month" ? "그 달" : "그 주")} 목표${total > 0 ? ` <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>` : ""}</div>
-        ${isCurrent ? `<button class="wl-cost-toggle" data-action="toggleGoalPicker">${goalPickerOpen ? "닫기" : (total > 0 ? "고치기" : "고르기")}</button>` : ""}
+        <div class="wl-card-title" style="margin-bottom:0">${isCurrent ? unit : (scale === "month" ? "그 달" : "그 주")} 목표${total > 0 ? ` <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>` : ""}${total > 0 && done === total ? ` <span class="wl-goal-next-badge">달성</span>` : ""}</div>
+        ${isCurrent ? `<button class="wl-cost-toggle" data-action="toggleGoalPicker">${goalPickerOpen ? "닫기" : (total === 0 ? "고르기" : (done === total ? "더 넣기" : "고치기"))}</button>` : ""}
       </div>
       ${total === 0 && !goalPickerOpen
         ? `<div class="wl-empty">${isCurrent ? "아직 정하지 않았어요." : "정해둔 목표가 없었어요."}</div>`
+        + (isCurrent && goalPickerOpen ? "" : "")
         : `<ul class="wl-goal-list">
             ${items.map((i) => `
               <li class="wl-goal-item ${i.done ? "is-done" : ""}">
@@ -3179,6 +3211,8 @@ function renderPeriodGoals(scale, isCurrent) {
                 <span class="wl-goal-item-text">${escapeHtml(i.label)} · <b>${escapeHtml(i.sub)}</b></span>
               </li>`).join("")}
           </ul>`}
+      ${isCurrent && total > 0 && done === total && !goalPickerOpen
+        ? `<div class="wl-hint" style="margin-top:8px">이번 ${scale === "month" ? "달" : "주"}치는 다 끝냈어요. 더 하고 싶으면 "더 넣기"로 이어가면 됩니다.</div>` : ""}
       ${carry.length > 0 ? `
         <button class="wl-cost-toggle" data-action="carryOverGoals" data-scale="${scale}">
           ${ICONS.plus} 지난 ${scale === "month" ? "달" : "주"} 미달성 ${carry.length}개 다시 넣기
