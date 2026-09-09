@@ -610,3 +610,13 @@ body {
 }
 .wl-goalpick-row[disabled] { opacity: .35; cursor: not-allowed; }
 .wl-goalpick-row.is-on .wl-goalpick-name { color: var(--wl-work); }
+
+/* 습관 — 할일이 아니라 매일의 체크. 진행률 바도 완성도 없습니다. */
+.wl-habit-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.wl-habit-row { display: flex; align-items: center; gap: 10px; }
+.wl-habit-body { flex: 1; min-width: 0; }
+.wl-habit-name { font-size: 13.5px; }
+.wl-habit-name.is-done { color: var(--wl-text-muted); text-decoration: line-through; }
+.wl-habit-pin { font-size: 10px; color: var(--wl-work); border: 1px solid var(--wl-work); border-radius: 8px; padding: 1px 5px; vertical-align: middle; }
+.wl-habit-row.is-retired .wl-habit-name { color: var(--wl-save); }
+.wl-habit-medal { color: var(--wl-save); display: inline-flex; }

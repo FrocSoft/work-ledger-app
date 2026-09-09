@@ -196,6 +196,8 @@ function defaultState() {
     activeSpend: null,
     cancelledBlock: null,
     payoutRate: DEFAULT_PAYOUT_RATE,
+    habits: [],        // { id, name, pinned, retiredAt, createdAt }
+    habitLog: {},      // { "2026-09-09": [habitId, ...] }
     weeklyGoals: {},   // { "2026-09-07"(월요일): ["workId:subtaskId", ...] }
     monthlyGoals: {},  // { "2026-09": ["workId", ...] }
     goalRate: DEFAULT_GOAL_RATE,
@@ -242,6 +244,8 @@ function normalizeState(s) {
   }
   s.works.forEach((w) => { w.wip = w.wip === true; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
+  s.habits = (s.habits || []).map((h) => ({ ...h, pinned: h.pinned === true, retiredAt: h.retiredAt || null }));
+  s.habitLog = s.habitLog || {};
   s.weeklyGoals = s.weeklyGoals || {};
   s.monthlyGoals = s.monthlyGoals || {};
   if (typeof s.goalRate !== "number" || !(s.goalRate > 0)) s.goalRate = DEFAULT_GOAL_RATE;
@@ -289,7 +293,9 @@ let renderedDay = null;
 let resetConfirm = null;
 let logScale = "week"; // week | month
 let logAnchor = null;
-let goalPickerOpen = false;  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
+let goalPickerOpen = false;
+let habitEditOpen = false;
+let exportMsg = "";  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
 let switchFormOpen = false;
 let manualBlockOpen = false;
 let floatingTimerOn = false;
@@ -317,6 +323,7 @@ const drafts = {
   switchDraft: { task: "", workId: "", subtaskId: "" },
   manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
   saleAmount: {},
+  newHabit: "",
   payoutRate: null,
   goalRate: null,
   avgWorkPrice: null,
@@ -360,7 +367,7 @@ function reconcileSavings() {
     if (date === today || processed.has(date)) return;
     const blocks = state.blocksByDate[date] || [];
     const spends = state.spendsByDate[date] || [];
-    const leftover = Math.max(0, dailyPoolFromBlocks(blocks) - spentTotal(spends));
+    const leftover = Math.max(0, dailyPoolFromBlocks(blocks) + habitPointsFor(date) - spentTotal(spends));
     addTo += leftover;
     newlyProcessed.push(date);
     delete state.borrowedByDate[date];
@@ -666,11 +673,112 @@ function updateSaveIndicator() {
 }
 
 // ---- computed ----
+
+// ---- 습관 ----
+// 습관은 할일이 아닙니다. 끝이 없고, 하위 할일도 진행률도 없고, 값어치가
+// "얼마나 오래"가 아니라 "빠짐없이"에 있습니다. 그래서 블록이 아니라 체크로
+// 다루고, 25분 문턱 같은 시간 규칙이 아예 걸리지 않습니다.
+const HABIT_PINNED_MAX = 2;   // 점수를 주는 습관 수 — 새로 들이는 건 한둘이 한계
+const HABIT_LIST_MAX = 5;     // 목록 전체. 이 이상은 다 그만두게 된다는 게 통설
+function activeHabits() {
+  return state.habits.filter((h) => !h.retiredAt);
+}
+function retiredHabits() {
+  return state.habits.filter((h) => h.retiredAt);
+}
+function habitDone(habitId, day) {
+  return (state.habitLog[day] || []).includes(habitId);
+}
+// 지정 습관은 각 1점, 나머지는 트래킹. 그날 살아있는 습관을 모두 채우면 +1.
+// 상한이 구조로 잡혀서(지정 2개) 개수로 점수를 벌 수 없습니다.
+function habitPointsFor(day) {
+  const done = state.habitLog[day] || [];
+  if (done.length === 0) return 0;
+  const live = activeHabits();
+  const pinned = live.filter((h) => h.pinned && done.includes(h.id)).length;
+  const all = live.length > 0 && live.every((h) => done.includes(h.id));
+  return pinned + (all ? 1 : 0);
+}
+// 유예는 두지 않습니다. 대신 최고 기록이 남아서, 끊겨도 세운 건 안 사라집니다.
+function habitStreak(habitId) {
+  let d = new Date();
+  if (!habitDone(habitId, todayKey(d))) d = addDays(d, -1); // 오늘 아직이면 어제부터
+  let n = 0;
+  while (habitDone(habitId, todayKey(d))) { n += 1; d = addDays(d, -1); }
+  return n;
+}
+function habitBestStreak(habitId) {
+  const days = Object.keys(state.habitLog).filter((k) => state.habitLog[k].includes(habitId)).sort();
+  let best = 0, run = 0, prev = null;
+  days.forEach((k) => {
+    run = prev && todayKey(addDays(dateFromKey(prev), 1)) === k ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = k;
+  });
+  return best;
+}
+function habitCountBetween(habitId, keys) {
+  return keys.filter((k) => habitDone(habitId, k)).length;
+}
+function toggleHabitToday(habitId) {
+  const day = todayKey();
+  const list = state.habitLog[day] || [];
+  state.habitLog[day] = list.includes(habitId) ? list.filter((x) => x !== habitId) : [...list, habitId];
+  if (state.habitLog[day].length === 0) delete state.habitLog[day];
+  persistAndRender();
+}
+function addHabit() {
+  const name = drafts.newHabit.trim();
+  if (!name || activeHabits().length >= HABIT_LIST_MAX) return;
+  state.habits.push({
+    id: uid(), name,
+    pinned: activeHabits().filter((h) => h.pinned).length < HABIT_PINNED_MAX,
+    retiredAt: null, createdAt: Date.now(),
+  });
+  drafts.newHabit = "";
+  persistAndRender();
+}
+function toggleHabitPinned(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h) return;
+  if (!h.pinned && activeHabits().filter((x) => x.pinned).length >= HABIT_PINNED_MAX) {
+    window.alert(`점수를 주는 습관은 ${HABIT_PINNED_MAX}개까지예요.\n먼저 하나를 내려주세요.`);
+    return;
+  }
+  h.pinned = !h.pinned;
+  persistAndRender();
+}
+// 정착 = 졸업. 목록에서 빠져 명예의 전당으로 가고, 지정 자리를 돌려줍니다.
+function retireHabit(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h) return;
+  if (!window.confirm(`"${h.name}"을(를) 정착시킬까요?\n명예의 전당으로 가고 목록에서 빠집니다.`)) return;
+  h.retiredAt = Date.now();
+  h.pinned = false;
+  persistAndRender();
+}
+function unretireHabit(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h) return;
+  h.retiredAt = null;
+  persistAndRender();
+}
+function removeHabit(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h || !window.confirm(`"${h.name}" 습관을 지울까요?\n지금까지의 체크 기록도 함께 사라집니다.`)) return;
+  state.habits = state.habits.filter((x) => x.id !== habitId);
+  Object.keys(state.habitLog).forEach((k) => {
+    state.habitLog[k] = state.habitLog[k].filter((x) => x !== habitId);
+    if (state.habitLog[k].length === 0) delete state.habitLog[k];
+  });
+  persistAndRender();
+}
+
 function computeToday() {
   const today = todayKey();
   const todayBlocks = state.blocksByDate[today] || [];
   const todaySpends = state.spendsByDate[today] || [];
-  const dailyPool = dailyPoolFromBlocks(todayBlocks);
+  const dailyPool = dailyPoolFromBlocks(todayBlocks) + habitPointsFor(today);
   const dailySpent = spentTotal(todaySpends);
   const dailyAvailable = dailyPool - dailySpent;
   return { today, todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable };
@@ -2132,6 +2240,73 @@ function renderSpendPresetsEditor() {
     </div>`;
 }
 
+
+// 오늘의 체크. 지정 습관(점수 받는 것)은 점수를 표시하고, 나머지는 기록만.
+function renderHabitsCard() {
+  const live = activeHabits();
+  const retired = retiredHabits();
+  const day = todayKey();
+  const gained = habitPointsFor(day);
+  const allDone = live.length > 0 && live.every((h) => habitDone(h.id, day));
+  if (live.length === 0 && retired.length === 0 && !habitEditOpen) {
+    return `
+      <section class="wl-card">
+        <div class="wl-work-head">
+          <div class="wl-card-title" style="margin-bottom:0">습관</div>
+          <button class="wl-icon-btn" data-action="toggleHabitEdit">${ICONS.plus}</button>
+        </div>
+        <div class="wl-empty">매일 짧게 하는 일을 여기에. 시간 규칙과 무관하게 체크로 점수를 받습니다.</div>
+      </section>`;
+  }
+  return `
+    <section class="wl-card">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">습관${live.length > 0 ? ` <span class="wl-wip-count ${allDone ? "is-full" : ""}">오늘 ${gained}점</span>` : ""}</div>
+        <button class="wl-icon-btn" data-action="toggleHabitEdit">${habitEditOpen ? ICONS.check : ICONS.pencil}</button>
+      </div>
+      ${live.length === 0 ? `<div class="wl-empty">진행 중인 습관이 없어요.</div>` : `
+        <ul class="wl-habit-list">
+          ${live.map((h) => {
+            const on = habitDone(h.id, day);
+            const cur = habitStreak(h.id);
+            const best = habitBestStreak(h.id);
+            return `
+            <li class="wl-habit-row">
+              <button class="wl-checkbox ${on ? "is-done" : ""}" data-action="toggleHabitToday" data-habit="${h.id}">${on ? ICONS.check : ""}</button>
+              <div class="wl-habit-body">
+                <div class="wl-habit-name ${on ? "is-done" : ""}">${escapeHtml(h.name)}${h.pinned ? ` <span class="wl-habit-pin">1점</span>` : ""}</div>
+                <div class="wl-hint">${cur > 0 ? `${cur}일 연속` : "연속 끊김"}${best > 0 ? ` · 최고 ${best}일` : ""}</div>
+              </div>
+              ${habitEditOpen ? `
+                <button class="wl-wip-toggle ${h.pinned ? "is-on" : ""}" data-action="toggleHabitPinned" data-habit="${h.id}" title="점수 지정">${h.pinned ? "지정" : "트래킹"}</button>
+                <button class="wl-icon-btn" data-action="retireHabit" data-habit="${h.id}" title="정착시키기">${ICONS.archive}</button>
+                <button class="wl-icon-btn" data-action="removeHabit" data-habit="${h.id}">${ICONS.trash}</button>` : ""}
+            </li>`;
+          }).join("")}
+        </ul>
+        ${allDone ? `<div class="wl-hint" style="margin-top:8px">오늘 전부 채웠어요 · 보너스 +1점</div>` : ""}`}
+      ${habitEditOpen ? `
+        <div class="wl-field-row wl-field-row--tight">
+          <input class="wl-input wl-input--sm" placeholder="새 습관" data-draft="newHabit" data-enter-action="addHabit" value="${escapeAttr(drafts.newHabit)}" ${live.length >= HABIT_LIST_MAX ? "disabled" : ""} />
+          <button class="wl-btn wl-btn--ghost" data-action="addHabit" ${live.length >= HABIT_LIST_MAX ? "disabled" : ""}>${ICONS.plus}</button>
+        </div>
+        <div class="wl-hint">지정 ${live.filter((h) => h.pinned).length}/${HABIT_PINNED_MAX} · 목록 ${live.length}/${HABIT_LIST_MAX} · 한 번에 하나씩 늘리는 게 자리 잡기 쉬워요</div>` : ""}
+      ${retired.length > 0 ? `
+        <div class="wl-card-title" style="margin-top:14px">명예의 전당</div>
+        <ul class="wl-habit-list">
+          ${retired.map((h) => `
+            <li class="wl-habit-row is-retired">
+              <span class="wl-habit-medal">${ICONS.sparkles}</span>
+              <div class="wl-habit-body">
+                <div class="wl-habit-name">${escapeHtml(h.name)}</div>
+                <div class="wl-hint">최고 ${habitBestStreak(h.id)}일 연속</div>
+              </div>
+              ${habitEditOpen ? `<button class="wl-wip-toggle" data-action="unretireHabit" data-habit="${h.id}">되돌리기</button>` : ""}
+            </li>`).join("")}
+        </ul>` : ""}
+    </section>`;
+}
+
 function renderTodaySummaryColumn() {
   const { todayBlocks, todaySpends, dailyPool, dailySpent, dailyAvailable } = computeToday();
   return `
@@ -2141,6 +2316,7 @@ function renderTodaySummaryColumn() {
       ${figure("오늘 가용", dailyAvailable, dailyAvailable < 0 ? "spend" : "work")}
       ${figure("저축", state.savings, "save")}
     </section>
+    ${renderHabitsCard()}
     <section class="wl-card">
       <div class="wl-work-head">
         <div class="wl-card-title" style="margin-bottom:0">소비</div>
@@ -2961,6 +3137,81 @@ function renderRulesSection() {
     </div>`;
 }
 
+
+// ---- 분석용 내보내기 ----
+// state.json에는 이미지가 base64로 박혀 있어 그대로 넘기면 무겁고 쓸모도 없습니다.
+// 표로 뽑으면 이미지가 자연히 빠지고, 사람도 도구도 바로 읽습니다.
+// 화면에 띄우지 않고 클립보드로만 보냅니다 — 기록은 기록 탭에서 보면 되니까요.
+function csvCell(v) {
+  const t = String(v == null ? "" : v);
+  return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+}
+function csvRows(rows) {
+  return rows.map((r) => r.map(csvCell).join(",")).join("\n");
+}
+function buildExport() {
+  const hhmm = (ms) => {
+    const d = new Date(ms);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  const blocks = [["날짜", "시작", "종료", "분", "점수", "할일", "한일", "평가", "직접입력"]];
+  Object.keys(state.blocksByDate).sort().forEach((day) => {
+    (state.blocksByDate[day] || []).forEach((b) => {
+      blockSegments(b).filter((sg) => sg.minutes > 0).forEach((sg, i) => {
+        blocks.push([
+          day, i === 0 ? hhmm(blockStartedAt(b)) : "", i === 0 ? hhmm(b.completedAt) : "",
+          sg.minutes, i === 0 ? blockPoints(b) : "",
+          sg.workId ? workName(sg.workId) : "연결 없음", sg.task || "",
+          (SESSION_RATINGS.find((r) => r.id === b.rating) || {}).label || "",
+          b.manual ? "예" : "",
+        ]);
+      });
+    });
+  });
+  const spends = [["날짜", "항목", "점수"]];
+  Object.keys(state.spendsByDate).sort().forEach((day) => {
+    (state.spendsByDate[day] || []).forEach((sp) => spends.push([day, sp.label, sp.cost]));
+  });
+  const habits = [["날짜", "습관", "지정"]];
+  Object.keys(state.habitLog).sort().forEach((day) => {
+    (state.habitLog[day] || []).forEach((id) => {
+      const h = state.habits.find((x) => x.id === id);
+      habits.push([day, h ? h.name : id, h && h.pinned ? "예" : ""]);
+    });
+  });
+  const works = [["할일", "태그", "상태", "판매예상", "실수령예상", "쓴비용", "판매됨"]];
+  state.works.forEach((w) => {
+    const tag = w.tagId ? (state.tags.find((t) => t.id === w.tagId) || {}).name : "";
+    works.push([
+      w.name, tag || "",
+      w.archived ? "보관" : w.completed ? "완성" : w.wip ? "진행 중" : "대기",
+      w.expectedSalePrice != null ? w.expectedSalePrice : "",
+      w.expectedSalePrice != null ? netOf(w.expectedSalePrice) : "",
+      workCostTotal(w), w.sale ? w.sale.amount : "",
+    ]);
+  });
+  return [
+    `# 작업 장부 내보내기 ${todayKey()}`,
+    `# 실수령률 ${state.payoutRate}% · 목표 비율 ${state.goalRate}% · 평균 작품가 ${state.avgWorkPrice}`,
+    "", "## 블록", csvRows(blocks),
+    "", "## 소비", csvRows(spends),
+    "", "## 습관", csvRows(habits),
+    "", "## 할일", csvRows(works),
+  ].join("\n");
+}
+async function copyExport() {
+  const text = buildExport();
+  try {
+    await navigator.clipboard.writeText(text);
+    exportMsg = `복사했어요 (${text.split("\n").length}줄). 붙여넣어서 분석을 맡기면 됩니다.`;
+  } catch (e) {
+    // 클립보드가 막힌 경우에만 최후 수단으로 화면에 띄웁니다.
+    exportMsg = "복사에 실패했어요. 브라우저에서 클립보드 권한을 확인해주세요.";
+  }
+  render();
+  setTimeout(() => { exportMsg = ""; render(); }, 4000);
+}
+
 function renderResetSection() {
   const blockCount = Object.values(state.blocksByDate).reduce((a, list) => a + list.length, 0);
   const spendCount = Object.values(state.spendsByDate).reduce((a, list) => a + list.length, 0);
@@ -3039,6 +3290,7 @@ function summarize(keys) {
       });
     });
     (state.spendsByDate[k] || []).forEach((sp) => { spent += sp.cost; });
+    points += habitPointsFor(k);
   });
   return { points, spent, minutes, blocks, byWork };
 }
@@ -3290,6 +3542,27 @@ function renderLogView() {
         ${bars}
       </section>
 
+      ${(() => {
+        const live = activeHabits();
+        if (live.length === 0) return "";
+        const span = keys.length;
+        return `
+        <section class="wl-card">
+          <div class="wl-card-title">습관</div>
+          <div class="wl-logbars">
+            ${live.map((h) => {
+              const n = habitCountBetween(h.id, keys);
+              return `
+              <div class="wl-logbar">
+                <span class="wl-logbar-label is-wide">${escapeHtml(h.name)}</span>
+                <span class="wl-logbar-track"><span class="wl-logbar-fill" style="width:${Math.round((n / span) * 100)}%"></span></span>
+                <span class="wl-logbar-value">${n}/${span}일</span>
+              </div>`;
+            }).join("")}
+          </div>
+        </section>`;
+      })()}
+
       <section class="wl-card">
         <div class="wl-card-title">프로젝트별 시간</div>
           ${works.length === 0 ? `<div class="wl-empty">이 기간에는 기록이 없어요.</div>` : `
@@ -3363,6 +3636,15 @@ function renderSettingsOverlay() {
             <button class="wl-btn wl-btn--ghost" data-action="closeSettings">닫기</button>
             <button class="wl-btn wl-btn--ghost" data-action="logout">로그아웃</button>
           </div>
+          ${state ? `
+            <div class="wl-settings-block">
+              <div class="wl-card-title">분석용 내보내기</div>
+              <div class="wl-hint">블록 · 소비 · 습관 · 할일을 표로 만들어 클립보드에 복사합니다. 이미지는 빠집니다.</div>
+              <div class="wl-settings-actions" style="margin-top:10px">
+                <button class="wl-btn wl-btn--ghost" data-action="copyExport">${ICONS.check} 기록 복사</button>
+              </div>
+              ${exportMsg ? `<div class="wl-hint" style="margin-top:8px">${escapeHtml(exportMsg)}</div>` : ""}
+            </div>` : ""}
           ${state ? renderRulesSection() : ""}
           ${state ? renderTagManageSection() : ""}
           ${state ? renderResetSection() : ""}` : ""}
@@ -3409,6 +3691,14 @@ function runAction(name, ds) {
     case "rateSession": rateSession(ds.rating); break;
     case "undoCancelBlock": undoCancelBlock(); break;
     case "setLogScale": setLogScale(ds.scale); break;
+    case "toggleHabitEdit": habitEditOpen = !habitEditOpen; render(); break;
+    case "toggleHabitToday": toggleHabitToday(ds.habit); break;
+    case "toggleHabitPinned": toggleHabitPinned(ds.habit); break;
+    case "addHabit": addHabit(); break;
+    case "retireHabit": retireHabit(ds.habit); break;
+    case "unretireHabit": unretireHabit(ds.habit); break;
+    case "removeHabit": removeHabit(ds.habit); break;
+    case "copyExport": copyExport(); break;
     case "toggleGoalPicker": toggleGoalPicker(); break;
     case "toggleGoalPick": toggleGoalPick(ds.scale, ds.pick); break;
     case "carryOverGoals": carryOverGoals(ds.scale); break;
@@ -3559,6 +3849,7 @@ function onRootInput(e) {
     case "payoutRate": drafts.payoutRate = clampNumeric(); break;
     case "goalRate": drafts.goalRate = clampNumeric(); break;
     case "avgWorkPrice": drafts.avgWorkPrice = clampNumeric(); break;
+    case "newHabit": drafts.newHabit = value; break;
     case "manualTask": drafts.manualBlock.task = value; updateManualPreview(); break;
     case "manualDate": drafts.manualBlock.date = value; updateManualPreview(); break;
     case "manualTime": drafts.manualBlock.time = value; updateManualPreview(); break;
