@@ -1511,6 +1511,18 @@ function subtaskMinutes(workId, subtaskId) {
   });
   return minutes;
 }
+// 사진은 휴식 때만 붙일 수 있었습니다. 그때를 놓치면 다시 넣을 자리가 없어서,
+// 세션 기록 줄에서 언제든 붙이고 바꾸고 뺄 수 있게 했습니다.
+function setWorkUpdateImage(workId, updateId, dataUrl) {
+  const w = state.works.find((x) => x.id === workId);
+  const u = w && (w.updates || []).find((x) => x.id === updateId);
+  if (!u) return;
+  u.image = dataUrl;
+  persistAndRender();
+}
+function removeWorkUpdateImage(workId, updateId) {
+  setWorkUpdateImage(workId, updateId, null);
+}
 function removeWorkUpdate(workId, updateId) {
   const w = state.works.find((x) => x.id === workId);
   if (!w) return;
@@ -2964,6 +2976,13 @@ function renderWorkManageCard(w) {
                     <button class="wl-session-log-duration" data-action="editBlockMinutes" data-block="${block.id}">
                       ${ICONS.pencil} 소요시간 ${blockMinutes(block)}분 · 수정
                     </button>`) : ""}
+                  <div class="wl-session-log-photo">
+                    <label class="wl-session-log-duration">
+                      <input type="file" accept="image/*" hidden data-filepick="pickUpdateImage" data-work="${w.id}" data-update="${u.id}" />
+                      ${ICONS.image} ${u.image ? "사진 바꾸기" : "사진 추가"}
+                    </label>
+                    ${u.image ? `<button class="wl-session-log-duration" data-action="removeWorkUpdateImage" data-work="${w.id}" data-update="${u.id}">${ICONS.x} 사진 빼기</button>` : ""}
+                  </div>
                 </div>
                 <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
               </li>`;
@@ -3834,6 +3853,7 @@ function runAction(name, ds) {
     case "addWorkCost": addWorkCost(ds.work); break;
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
+    case "removeWorkUpdateImage": removeWorkUpdateImage(ds.work, ds.update); break;
     case "editBlockMinutes": startEditBlockMinutes(ds.block); break;
     case "saveEditBlockMinutes": saveEditBlockMinutes(); break;
     case "cancelEditBlockMinutes": cancelEditBlockMinutes(); break;
@@ -3993,6 +4013,10 @@ async function onRootChange(e) {
         drafts.newTier[catId] = { ...(drafts.newTier[catId] || {}), image: dataUrl };
       } else if (action === "pickPendingUpdateImage") {
         drafts.pendingUpdate.image = dataUrl;
+      } else if (action === "pickUpdateImage") {
+        // 이미 저장된 기록이라 초안이 아니라 바로 씁니다.
+        setWorkUpdateImage(filePick.dataset.work, filePick.dataset.update, dataUrl);
+        return;
       }
       render();
     } catch (err) {
