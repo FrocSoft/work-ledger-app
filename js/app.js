@@ -993,7 +993,21 @@ function completeActiveBlock() {
   persistAndRender();
 }
 
-function finishEarly() { completeActiveBlock(); }
+// 완료도 한 번 묻습니다. 계속 할 생각이었는데 눌러버리면 블록이 거기서
+// 끊기고, 남은 시간은 다음 블록으로 쪼개져 점수 계산이 달라져요. 아직 점수가
+// 덜 찼다면 얼마나 더 하면 되는지도 같이 알려줍니다.
+function finishEarly() {
+  const active = state.activeBlock;
+  if (!active) return;
+  const minutes = Math.round(activeElapsedMs(active) / 60000);
+  const points = computeBlockPoints(segmentsBasePoints(closedSegments(active, Date.now())), minutes);
+  const full = computeBlockPoints(segmentsBasePoints(closedSegments(active, Date.now())), WORK_MIN);
+  const more = minutes < WORK_MIN && full > points
+    ? `\n${WORK_MIN - minutes}분 더 하면 ${full}점이 돼요.`
+    : "";
+  if (!window.confirm(`${minutes}분 · ${points}점으로 이 블록을 완료할까요?${more}`)) return;
+  completeActiveBlock();
+}
 function skipBreak() { endSession(); persistAndRender(); }
 
 // 중단은 지금까지 한 시간을 통째로 버립니다. 옆 버튼들과 나란히 있어서 잘못
