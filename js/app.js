@@ -1141,6 +1141,10 @@ function removeFromQueue(id) {
 }
 function startQueue() {
   if (state.activeBlock || state.queue.length === 0) return;
+  if (state.activeSpend) {
+    window.alert("소비 타이머가 돌아가는 중이에요. 먼저 끄고 시작해주세요.");
+    return;
+  }
   startNextQueueItem();
   persistAndRender();
 }
@@ -1170,6 +1174,12 @@ function spendStatusText(activeSpend) {
 }
 function startSpendTimer(label, cost) {
   if (state.activeSpend) return;
+  // 작업과 소비가 같이 돌아가는 상태는 애초에 있으면 안 됩니다. 시간은 하나뿐이고
+  // 둘 다 켜져 있으면 어느 쪽 기록도 사실이 아니게 돼요.
+  if (state.activeBlock) {
+    window.alert("작업 블록이 돌아가는 중이에요. 블록을 끝내거나 중단한 뒤에 시작해주세요.");
+    return;
+  }
   if (!window.confirm(`"${label}" 소비를 시작할까요? (바로 -${cost}점으로 1시간, 1시간이 지나면 10분마다 1점씩 추가 차감)`)) return;
   state.activeSpend = { label, cost, startedAt: Date.now(), appliedPoints: 0, logId: null };
   applyActiveSpendTick();
@@ -2637,24 +2647,20 @@ function columnLabel(text) {
 }
 
 // 작업 블록이 돌아가는 동안에는 지금 하는 그것 말고 아무것도 안 보여줍니다.
-// 휴식 중에는 풀어줘요 — 다음에 뭘 할지 고르는 게 보통 그때라서요. 탭바는
-// 남겨두니 할일이나 기록은 그대로 갈 수 있고, 홈으로 돌아오면 다시 타이머만
-// 보입니다.
+// 휴식 중에도, 일시정지 중에도 풀어줘요 — 손을 멈춘 김에 다음을 보는 거니까요.
+// 탭바는 남겨두니 할일이나 기록은 그대로 갈 수 있고, 홈으로 돌아오면 다시
+// 타이머만 보입니다. activeSpend까지 보는 건 안전장치입니다: 원래 둘은 같이
+// 돌 수 없지만, 옛 기록에 그런 상태가 남아 있다면 끄기 버튼을 감추면 안 돼요.
 function isFocusMode() {
   const a = state.activeBlock;
-  return !!(a && a.phase === "work");
+  return !!(a && a.phase === "work" && !a.pausedAt && !state.activeSpend);
 }
 
 function renderDashboard() {
   if (isFocusMode()) {
-    // 돌고 있는 소비 타이머만은 남깁니다. 저걸 감추면 끄기 버튼이 같이 사라지는데
-    // 1시간이 지나면 10분마다 점수가 계속 빠져나가서요.
     return `
       <div class="wl-dashboard-grid wl-dashboard-grid--focus">
-        <div class="wl-dash-col">
-          ${renderTimeBlockColumn(true)}
-          ${state.activeSpend ? `<section class="wl-card">${renderActiveSpendTimer()}</section>` : ""}
-        </div>
+        <div class="wl-dash-col">${renderTimeBlockColumn(true)}</div>
       </div>`;
   }
   return `
