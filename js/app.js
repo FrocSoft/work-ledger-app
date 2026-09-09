@@ -1894,11 +1894,14 @@ function renderSwitchForm() {
           <option value="">할일 선택</option>
           ${activeWorks.map((w) => `<option value="${w.id}" ${d.workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
         </select>
-        ${selected && selected.subtasks.length > 0 ? `
+        ${(() => {
+          const subs = selected ? pickableSubtasks(selected, d.subtaskId) : [];
+          return subs.length === 0 ? "" : `
           <select class="wl-select" data-select="switchSub">
             <option value="">하위 할일 선택 안 함</option>
-            ${selected.subtasks.map((st) => `<option value="${st.id}" ${d.subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
-          </select>` : ""}
+            ${subs.map((st) => `<option value="${st.id}" ${d.subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}${st.done ? " (완료됨)" : ""}</option>`).join("")}
+          </select>`;
+        })()}
       </div>
       <div class="wl-field-row wl-field-row--tight">
         <input class="wl-input wl-input--sm" placeholder="이제 할 일 (비우면 유지)" data-draft="switchTask" data-enter-action="switchSessionWork" value="${escapeAttr(d.task)}" />
@@ -2005,6 +2008,13 @@ function renderQueueItem(item, idx) {
     </li>`;
 }
 
+// 타임블록에 붙일 때는 아직 안 끝낸 하위 할일만 고릅니다. 이미 골라둔 것이
+// 그 사이 완료됐다면 그것만은 남겨요 — 목록에서 조용히 사라져 선택이 풀리는
+// 쪽이 더 헷갈리니까요.
+function pickableSubtasks(w, selectedId) {
+  return (w.subtasks || []).filter((st) => !st.done || st.id === selectedId);
+}
+
 // One 할일 + 하위 할일 pair. Used for the first link and every extra one, so an
 // added 할일 is chosen exactly the same way rather than as a lesser attachment.
 function renderWorkLinkRow({ workId, subtaskId, workSelect, subSelect, index, removeAction, placeholder }) {
@@ -2017,11 +2027,14 @@ function renderWorkLinkRow({ workId, subtaskId, workSelect, subSelect, index, re
         <option value="">${escapeHtml(placeholder)}</option>
         ${activeWorks.map((w) => `<option value="${w.id}" ${workId === w.id ? "selected" : ""}>${escapeHtml(w.name)}</option>`).join("")}
       </select>
-      ${selected && selected.subtasks.length > 0 ? `
+      ${(() => {
+        const subs = selected ? pickableSubtasks(selected, subtaskId) : [];
+        return subs.length === 0 ? "" : `
         <select class="wl-select" data-select="${subSelect}"${idx}>
           <option value="">하위 할일 선택 안 함</option>
-          ${selected.subtasks.map((st) => `<option value="${st.id}" ${subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}</option>`).join("")}
-        </select>` : ""}
+          ${subs.map((st) => `<option value="${st.id}" ${subtaskId === st.id ? "selected" : ""}>${escapeHtml(st.name)}${st.done ? " (완료됨)" : ""}</option>`).join("")}
+        </select>`;
+      })()}
       ${removeAction ? `<button class="wl-icon-btn" data-action="${removeAction}" data-index="${index}">${ICONS.x}</button>` : ""}
     </div>`;
 }
@@ -3084,10 +3097,10 @@ function renderShell() {
         </div>
         <nav class="wl-tabs">
           <button class="wl-tab ${currentTab === "dashboard" ? "is-active" : ""}" data-action="switchTab" data-tab="dashboard">홈</button>
-          <button class="wl-tab ${currentTab === "log" ? "is-active" : ""}" data-action="switchTab" data-tab="log">기록</button>
           <button class="wl-tab ${currentTab === "works-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="works-manage">할일</button>
           <button class="wl-tab ${currentTab === "works-done" ? "is-active" : ""}" data-action="switchTab" data-tab="works-done">작품</button>
           <button class="wl-tab ${currentTab === "goals-manage" ? "is-active" : ""}" data-action="switchTab" data-tab="goals-manage">목표</button>
+          <button class="wl-tab ${currentTab === "log" ? "is-active" : ""}" data-action="switchTab" data-tab="log">기록</button>
         </nav>
       </header>
       <div id="wl-save-status" class="wl-savebar"></div>
