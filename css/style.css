@@ -411,6 +411,11 @@ body {
   background: var(--wl-surface); border: 1px solid var(--wl-border); border-radius: 4px;
   padding: 22px; width: 100%; max-width: 420px; max-height: 90vh; overflow-y: auto;
 }
+/* 닫기는 맨 아래 버튼 줄이 아니라 제목 옆의 X입니다. 아래에 두면 로그아웃 같은
+   되돌리기 힘든 버튼 옆에 붙어서 잘못 누르기 쉬웠어요. */
+.wl-settings-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.wl-settings-head .wl-settings-title { margin-bottom: 0; }
+.wl-settings-close { flex: 0 0 auto; margin: -4px -4px 0 0; }
 .wl-settings-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
 .wl-settings-desc { font-size: 12px; color: var(--wl-text-muted); margin-bottom: 16px; line-height: 1.5; }
 .wl-settings-field { margin-bottom: 12px; }
@@ -620,3 +625,18 @@ body {
 .wl-habit-pin { font-size: 10px; color: var(--wl-work); border: 1px solid var(--wl-work); border-radius: 8px; padding: 1px 5px; vertical-align: middle; }
 .wl-habit-row.is-retired .wl-habit-name { color: var(--wl-save); }
 .wl-habit-medal { color: var(--wl-save); display: inline-flex; }
+
+/* 기록 탭: 좁은 화면에서는 한 줄로 쌓이고, 넓으면 요약 묶음과 블록 목록이
+   나란히 섭니다. 데스크탑에서 아래로 한없이 내려갈 이유가 없어요.
+   auto-fit이라 월간(블록 카드 없음)일 때는 한 덩이가 폭을 다 씁니다. */
+.wl-log-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (min-width: 900px) {
+  .wl-logbody {
+    /* 위쪽 .wl-logbody의 520px 상한을 풀어야 두 덩이가 들어갑니다. */
+    max-width: 1040px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 18px;
+    align-items: start;
+  }
+}
