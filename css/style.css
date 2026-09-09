@@ -98,6 +98,9 @@ body {
 @media (min-width: 1240px) {
   .wl-dashboard-grid { grid-template-columns: repeat(4, 1fr); }
 }
+/* 작업 중에는 타이머 한 장뿐이라, 넓은 화면에서 왼쪽 구석에 몰리지 않게
+   가운데로 세웁니다. 칸 수 규칙보다 뒤에 와야 이깁니다. */
+.wl-dashboard-grid--focus { grid-template-columns: 1fr; max-width: 560px; margin: 0 auto; }
 
 /* below the 2-column breakpoint, swipe between columns instead of stacking them */
 @media (max-width: 699px) {

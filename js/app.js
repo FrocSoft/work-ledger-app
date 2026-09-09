@@ -2118,10 +2118,10 @@ function renderWeeklyGoalCard() {
     </section>`;
 }
 
-function renderTimeBlockColumn() {
+function renderTimeBlockColumn(focus = false) {
   const active = state.activeBlock;
   return `
-    ${renderWeeklyGoalCard()}
+    ${focus ? "" : renderWeeklyGoalCard()}
     <section class="wl-card">
       ${active
         ? renderTimerBlock({
@@ -2135,9 +2135,10 @@ function renderTimeBlockColumn() {
           })
         : renderCancelUndo() || `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 계획을 짜고 시작해보세요.</div>`}
     </section>
-    <section class="wl-card">
-      ${renderQueueSection()}
-    </section>`;
+    ${focus ? "" : `
+      <section class="wl-card">
+        ${renderQueueSection()}
+      </section>`}`;
 }
 
 // ---- render: column 2 — project status ----
@@ -2635,7 +2636,27 @@ function columnLabel(text) {
   return `<div class="wl-col-label">${escapeHtml(text)}</div>`;
 }
 
+// 작업 블록이 돌아가는 동안에는 지금 하는 그것 말고 아무것도 안 보여줍니다.
+// 휴식 중에는 풀어줘요 — 다음에 뭘 할지 고르는 게 보통 그때라서요. 탭바는
+// 남겨두니 할일이나 기록은 그대로 갈 수 있고, 홈으로 돌아오면 다시 타이머만
+// 보입니다.
+function isFocusMode() {
+  const a = state.activeBlock;
+  return !!(a && a.phase === "work");
+}
+
 function renderDashboard() {
+  if (isFocusMode()) {
+    // 돌고 있는 소비 타이머만은 남깁니다. 저걸 감추면 끄기 버튼이 같이 사라지는데
+    // 1시간이 지나면 10분마다 점수가 계속 빠져나가서요.
+    return `
+      <div class="wl-dashboard-grid wl-dashboard-grid--focus">
+        <div class="wl-dash-col">
+          ${renderTimeBlockColumn(true)}
+          ${state.activeSpend ? `<section class="wl-card">${renderActiveSpendTimer()}</section>` : ""}
+        </div>
+      </div>`;
+  }
   return `
     <div class="wl-dashboard-grid">
       <div class="wl-dash-col">${columnLabel("타임 블록")}${renderTimeBlockColumn()}</div>
