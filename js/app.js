@@ -186,6 +186,7 @@ function defaultState() {
     spendsByDate: {},
     borrowedByDate: {},
     collapsedWorks: {},
+    weeklyGoalCollapsed: false,
     savings: 0,
     processedDates: [],
     offDayLog: [],
@@ -232,6 +233,7 @@ function normalizeState(s) {
   s.queue = s.queue || [];
   s.borrowedByDate = s.borrowedByDate || {};
   s.collapsedWorks = s.collapsedWorks || {};
+  s.weeklyGoalCollapsed = !!s.weeklyGoalCollapsed;
   // 진행 중/대기 구분이 없던 상태에서 넘어올 때는, 최근에 기록이 있던
   // 프로젝트 순으로 한도만큼만 진행 중으로 올려둡니다. 그 뒤로는 수동입니다.
   if (!s.works.some((w) => w.wip !== undefined)) {
@@ -1291,6 +1293,10 @@ function startEditWork(workId) {
   render();
 }
 function cancelEditWork() { editingWorkId = null; render(); }
+function toggleWeeklyGoalCollapse() {
+  state.weeklyGoalCollapsed = !state.weeklyGoalCollapsed;
+  persistAndRender();
+}
 function toggleWorkCollapse(workId) {
   state.collapsedWorks[workId] = !state.collapsedWorks[workId];
   persistAndRender();
@@ -2086,22 +2092,29 @@ function renderCancelUndo() {
 
 // 다음에 뭘 할지 정하는 자리 바로 위에 이번 주 약속을 둡니다 — 안 보이는
 // 약속은 행동을 이끌지 못합니다. 정해둔 게 없으면 아예 나오지 않습니다.
+// 접을 수 있게 둔 이유는 목록이 길어지면 바로 아래 타임블록이 화면 밖으로
+// 밀려나서입니다. 접어도 몇/몇은 제목 줄에 남아서 약속 자체는 계속 보입니다.
 function renderWeeklyGoalCard() {
   const { total, done, items } = goalProgress("week", new Date());
   if (total === 0) return "";
+  const open = !state.weeklyGoalCollapsed;
   return `
     <section class="wl-card">
       <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">이번 주 목표 <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>${done === total ? ` <span class="wl-goal-next-badge">달성</span>` : ""}</div>
-        <button class="wl-cost-toggle" data-action="switchTab" data-tab="log">기록에서 고치기</button>
+        <button class="wl-work-collapse-toggle" data-action="toggleWeeklyGoalCollapse" aria-expanded="${open}">
+          <span class="wl-goal-cat-toggle-icon ${open ? "is-expanded" : ""}">${ICONS.chevron}</span>
+          <span class="wl-card-title" style="margin-bottom:0">이번 주 목표 <span class="wl-wip-count ${done === total ? "is-full" : ""}">${done}/${total}</span>${done === total ? ` <span class="wl-goal-next-badge">달성</span>` : ""}</span>
+        </button>
+        ${open ? `<button class="wl-cost-toggle" data-action="switchTab" data-tab="log">기록에서 고치기</button>` : ""}
       </div>
-      <ul class="wl-goal-list">
-        ${items.map((i) => `
-          <li class="wl-goal-item ${i.done ? "is-done" : ""}">
-            <span class="wl-checkbox ${i.done ? "is-done" : ""}">${i.done ? ICONS.check : ""}</span>
-            <span class="wl-goal-item-text">${escapeHtml(i.label)} · <b>${escapeHtml(i.sub)}</b></span>
-          </li>`).join("")}
-      </ul>
+      ${open ? `
+        <ul class="wl-goal-list">
+          ${items.map((i) => `
+            <li class="wl-goal-item ${i.done ? "is-done" : ""}">
+              <span class="wl-checkbox ${i.done ? "is-done" : ""}">${i.done ? ICONS.check : ""}</span>
+              <span class="wl-goal-item-text">${escapeHtml(i.label)} · <b>${escapeHtml(i.sub)}</b></span>
+            </li>`).join("")}
+        </ul>` : ""}
     </section>`;
 }
 
@@ -3760,6 +3773,7 @@ function runAction(name, ds) {
     case "saveEditWork": saveEditWork(); break;
     case "cancelEditWork": cancelEditWork(); break;
     case "toggleWorkCollapse": toggleWorkCollapse(ds.work); break;
+    case "toggleWeeklyGoalCollapse": toggleWeeklyGoalCollapse(); break;
     case "toggleAllWorkCollapse": toggleAllWorkCollapse(); break;
     case "archiveWork": archiveWork(ds.work); break;
     case "toggleWorkWip": toggleWorkWip(ds.work); break;
