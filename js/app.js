@@ -681,7 +681,9 @@ function updateSaveIndicator() {
 const HABIT_PINNED_MAX = 2;   // 점수를 주는 습관 수 — 새로 들이는 건 한둘이 한계
 const HABIT_LIST_MAX = 5;     // 목록 전체. 이 이상은 다 그만두게 된다는 게 통설
 function activeHabits() {
-  return state.habits.filter((h) => !h.retiredAt);
+  // 지정(점수 받는) 습관을 위로. 매일 먼저 보게 되는 게 그것들이라서요.
+  return state.habits.filter((h) => !h.retiredAt)
+    .sort((a, b) => (b.pinned === true) - (a.pinned === true));
 }
 function retiredHabits() {
   return state.habits.filter((h) => h.retiredAt);
@@ -3509,6 +3511,7 @@ function renderLogView() {
 
   return `
     <div class="wl-body wl-logbody">
+      <div class="wl-log-side">
       <section class="wl-card">
         <div class="wl-log-scale">
           <button class="wl-tab ${!isMonth ? "is-active" : ""}" data-action="setLogScale" data-scale="week">주간</button>
@@ -3576,7 +3579,9 @@ function renderLogView() {
             </div>`}
       </section>
 
+      </div>
       ${isMonth ? "" : `
+        <div class="wl-log-side">
         <section class="wl-card">
           <div class="wl-card-title">블록</div>
             ${keys.every((k) => (state.blocksByDate[k] || []).length === 0)
@@ -3590,7 +3595,8 @@ function renderLogView() {
                       <ul class="wl-log">${rows.map(renderBlockLogRow).join("")}</ul>
                     </div>`;
                 }).join("")}
-        </section>`}
+        </section>
+        </div>`}
     </div>`;
 }
 
@@ -3601,7 +3607,10 @@ function renderSettingsOverlay() {
   return `
     <div class="wl-settings-overlay">
       <div class="wl-settings-panel">
-        <div class="wl-settings-title">GitHub 연결 설정</div>
+        <div class="wl-settings-head">
+          <div class="wl-settings-title">GitHub 연결 설정</div>
+          ${canClose ? `<button class="wl-icon-btn wl-settings-close" data-action="closeSettings" aria-label="닫기" title="닫기">${ICONS.x}</button>` : ""}
+        </div>
         <div class="wl-settings-desc">
           데이터를 저장할 프라이빗 저장소 정보와, Contents 읽기/쓰기 권한을 가진 fine-grained
           PAT를 입력하세요. 이 정보는 이 브라우저에만 저장되고 어디에도 전송되지 않아요.
@@ -3632,10 +3641,6 @@ function renderSettingsOverlay() {
           <button class="wl-btn wl-btn--primary" data-action="saveSettings" ${drafts.settingsBusy ? "disabled" : ""}>저장하고 시작</button>
         </div>
         ${canClose ? `
-          <div class="wl-settings-actions">
-            <button class="wl-btn wl-btn--ghost" data-action="closeSettings">닫기</button>
-            <button class="wl-btn wl-btn--ghost" data-action="logout">로그아웃</button>
-          </div>
           ${state ? `
             <div class="wl-settings-block">
               <div class="wl-card-title">분석용 내보내기</div>
@@ -3647,6 +3652,13 @@ function renderSettingsOverlay() {
             </div>` : ""}
           ${state ? renderRulesSection() : ""}
           ${state ? renderTagManageSection() : ""}
+          <div class="wl-settings-block">
+            <div class="wl-settings-label">연결 해제</div>
+            <div class="wl-hint">이 브라우저에 저장된 토큰과 저장소 정보만 지웁니다. 기록은 저장소에 그대로 남아요.</div>
+            <div class="wl-settings-actions">
+              <button class="wl-btn wl-btn--ghost" data-action="logout">로그아웃</button>
+            </div>
+          </div>
           ${state ? renderResetSection() : ""}` : ""}
       </div>
     </div>`;
@@ -3801,6 +3813,12 @@ function onRootClick(e) {
   if (trigger) {
     e.preventDefault();
     openImageLightbox(trigger.src, trigger.alt);
+    return;
+  }
+  // 설정 패널 바깥의 어두운 곳을 누르면 닫힙니다. target을 직접 확인하는 이유는
+  // 패널 안 빈 곳을 눌렀을 때까지 닫히면 곤란해서예요.
+  if (e.target.classList && e.target.classList.contains("wl-settings-overlay")) {
+    closeSettings();
     return;
   }
   const el = e.target.closest("[data-action]");
@@ -4003,6 +4021,11 @@ function attachHandlers() {
   root.addEventListener("pointermove", onPointerMove);
   root.addEventListener("pointerup", onPointerUp);
   root.addEventListener("pointercancel", onPointerCancel);
+  // Esc로도 설정 패널을 닫습니다. 입력칸에 포커스가 있어도 동작해야 해서
+  // root가 아니라 document에 답니다.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && settingsOpen) closeSettings();
+  });
   // Closing the floating window from its own controls has to switch the
   // header button back off.
   const pipVideo = document.getElementById("wl-pip-video");
