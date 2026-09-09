@@ -2200,7 +2200,7 @@ function renderProjectStatusRow(w) {
       ${stats.minutes > 0 ? `<div class="wl-hint">블록 ${stats.count}개 · 총 ${formatMinutes(stats.minutes)}</div>` : ""}
       ${latest
         ? `<div class="wl-project-status">
-            ${latest.image ? `<img src="${latest.image}" class="wl-update-img" alt="" />` : ""}
+            ${latest.image ? `<img src="${latest.image}" class="wl-update-img wl-lightbox-trigger" alt="${escapeAttr(latest.text)}" />` : ""}
             <div class="wl-project-status-text">${escapeHtml(latest.text)}</div>
           </div>`
         : `<div class="wl-empty">아직 기록이 없어요.</div>`}
@@ -2962,7 +2962,7 @@ function renderWorkManageCard(w) {
               const isEditingMin = !!block && editingBlockId === block.id;
               return `
               <li class="wl-session-log-row">
-                ${u.image ? `<img src="${u.image}" class="wl-update-img" alt="" />` : ""}
+                ${u.image ? `<img src="${u.image}" class="wl-update-img wl-lightbox-trigger" alt="${escapeAttr(u.text)}" />` : ""}
                 <div class="wl-session-log-body">
                   <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
                   <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
