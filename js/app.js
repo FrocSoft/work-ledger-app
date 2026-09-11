@@ -336,6 +336,9 @@ let editingTagId = null;
 let editingTagDraft = { name: "", points: "" };
 let lightboxImage = null;
 let editingBlockId = null;
+// 세션 기록 줄마다 손볼 거리가 넷이나 돼서 목록이 버튼 벽이 됐습니다. 평소엔
+// 감춰두고 ⋯ 를 누른 한 줄에서만 폅니다. 한 번에 한 줄이면 충분해요.
+let openUpdateId = null;
 let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
 let notifiedKey = null;
@@ -3012,32 +3015,36 @@ function renderWorkManageCard(w) {
             ${w.updates.map((u) => {
               const block = u.blockId ? findBlockById(u.blockId) : null;
               const isEditingMin = !!block && editingBlockId === block.id;
+              // 소요시간을 고치는 중이면 닫히면 안 되니 무조건 열어둡니다.
+              const open = openUpdateId === u.id || isEditingMin;
               return `
               <li class="wl-session-log-row">
                 ${u.image ? `<img src="${u.image}" class="wl-update-img wl-lightbox-trigger" alt="${escapeAttr(u.text)}" />` : ""}
                 <div class="wl-session-log-body">
                   <div class="wl-session-log-text">${escapeHtml(u.text)}</div>
-                  <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}</div>
-                  ${block ? (isEditingMin ? `
-                    <div class="wl-session-log-duration is-editing">
-                      소요시간
-                      <input class="wl-inline-num" data-draft="editBlockMinutes" value="${escapeAttr(editingBlockMinutesDraft)}" inputmode="numeric" data-enter-action="saveEditBlockMinutes" />분
-                      <button class="wl-icon-btn" data-action="saveEditBlockMinutes">${ICONS.check}</button>
-                      <button class="wl-icon-btn" data-action="cancelEditBlockMinutes">${ICONS.x}</button>
-                    </div>` : `
-                    <button class="wl-session-log-duration" data-action="editBlockMinutes" data-block="${block.id}">
-                      ${ICONS.pencil} 소요시간 ${blockMinutes(block)}분 · 수정
-                    </button>`) : ""}
-                  <div class="wl-session-log-photo">
+                  <div class="wl-session-log-meta">${escapeHtml(formatKDate(new Date(u.at)))} ${formatTime(u.at)}${block ? ` · ${blockMinutes(block)}분` : ""}</div>
+                  ${!open ? "" : `
+                  <div class="wl-session-log-tools">
+                    ${block ? (isEditingMin ? `
+                      <div class="wl-session-log-duration is-editing">
+                        소요시간
+                        <input class="wl-inline-num" data-draft="editBlockMinutes" value="${escapeAttr(editingBlockMinutesDraft)}" inputmode="numeric" data-enter-action="saveEditBlockMinutes" />분
+                        <button class="wl-icon-btn" data-action="saveEditBlockMinutes">${ICONS.check}</button>
+                        <button class="wl-icon-btn" data-action="cancelEditBlockMinutes">${ICONS.x}</button>
+                      </div>` : `
+                      <button class="wl-session-log-duration" data-action="editBlockMinutes" data-block="${block.id}">
+                        ${ICONS.pencil} 소요시간 수정
+                      </button>`) : ""}
                     <label class="wl-session-log-duration">
                       <input type="file" accept="image/*" hidden data-filepick="pickUpdateImage" data-work="${w.id}" data-update="${u.id}" />
                       ${ICONS.image} ${u.image ? "사진 바꾸기" : "사진 추가"}
                     </label>
                     <button class="wl-session-log-duration" data-action="pasteUpdateImage" data-work="${w.id}" data-update="${u.id}">붙여넣기</button>
                     ${u.image ? `<button class="wl-session-log-duration" data-action="removeWorkUpdateImage" data-work="${w.id}" data-update="${u.id}">${ICONS.x} 사진 빼기</button>` : ""}
-                  </div>
+                    <button class="wl-session-log-duration" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.trash} 기록 삭제</button>
+                  </div>`}
                 </div>
-                <button class="wl-icon-btn" data-action="removeWorkUpdate" data-work="${w.id}" data-update="${u.id}">${ICONS.x}</button>
+                <button class="wl-icon-btn wl-session-log-more ${open ? "is-open" : ""}" data-action="toggleUpdateTools" data-update="${u.id}" aria-label="${open ? "닫기" : "고치기"}" title="${open ? "닫기" : "고치기"}">⋯</button>
               </li>`;
             }).join("")}
           </ul>` : ""}
@@ -3906,6 +3913,11 @@ function runAction(name, ds) {
     case "addWorkCost": addWorkCost(ds.work); break;
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
+    case "toggleUpdateTools":
+      openUpdateId = openUpdateId === ds.update ? null : ds.update;
+      editingBlockId = null;   // 다른 줄을 열면 고치던 소요시간은 접습니다
+      render();
+      break;
     case "removeWorkUpdateImage": removeWorkUpdateImage(ds.work, ds.update); break;
     case "pasteUpdateImage":
       pasteImageInto((url) => setWorkUpdateImage(ds.work, ds.update, url));
