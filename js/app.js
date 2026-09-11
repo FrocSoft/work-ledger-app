@@ -2936,7 +2936,6 @@ function renderCostSection(w) {
     </div>
     ${expected != null && netOf(expected) > 0 ? `
       <div class="wl-hint">재료비가 실수령의 ${Math.round((total / netOf(expected)) * 1000) / 10}% · 실수령률 ${state.payoutRate}% 적용</div>` : ""}
-    ${isSellable(w) ? renderSaleRow(w) : ""}
     ${costs.length > 0 ? `
       <ul class="wl-cost-list">
         ${costs.map((c) => `
@@ -3020,6 +3019,7 @@ function renderWorkManageCard(w) {
           <input class="wl-input wl-input--sm" placeholder="하위 할일 추가" data-draft="newSubtask" data-work="${w.id}" data-enter-action="addSubtask" value="${escapeAttr(drafts.newSubtask[w.id] || "")}" />
           <button class="wl-btn wl-btn--ghost" data-action="addSubtask" data-work="${w.id}">${ICONS.plus}</button>
         </div>`}
+        ${isSellable(w) ? renderSaleRow(w) : ""}
         ${renderCostSection(w)}
         ${(w.updates || []).length > 0 ? `
           <button class="wl-goal-cat-toggle wl-section-toggle" data-action="toggleLogSection" data-work="${w.id}">
