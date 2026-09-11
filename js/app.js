@@ -339,6 +339,13 @@ let editingBlockId = null;
 // 세션 기록 줄마다 손볼 거리가 넷이나 돼서 목록이 버튼 벽이 됐습니다. 평소엔
 // 감춰두고 ⋯ 를 누른 한 줄에서만 폅니다. 한 번에 한 줄이면 충분해요.
 let openUpdateId = null;
+// 비용과 세션 기록은 할일 카드에서 제일 긴 덩이입니다. 기본은 접어두고 필요할
+// 때만 폅니다. 화면에서만 쓰는 상태라 저장소에는 안 남깁니다.
+const openCostWorks = new Set();
+const openLogWorks = new Set();
+function toggleInSet(set, key) {
+  if (set.has(key)) set.delete(key); else set.add(key);
+}
 let editingBlockMinutesDraft = "";
 let spendPresetsEditOpen = false;
 let notifiedKey = null;
@@ -2912,8 +2919,13 @@ function renderCostSection(w) {
   const costOpen = !!costFormOpen[w.id];
   const total = workCostTotal(w);
   const expected = w.expectedSalePrice;
+  const open = openCostWorks.has(w.id);
   return `
-    <div class="wl-card-title" style="margin-top:14px">비용</div>
+    <button class="wl-goal-cat-toggle wl-section-toggle" data-action="toggleCostSection" data-work="${w.id}">
+      <span class="wl-goal-cat-name">비용 <span class="wl-section-count">${total.toLocaleString()}원</span></span>
+      <span class="wl-goal-cat-toggle-icon ${open ? "is-expanded" : ""}">${ICONS.chevron}</span>
+    </button>
+    ${!open ? "" : `
     <div class="wl-project-money">
       <span>쓴 비용 <b>${total.toLocaleString()}원</b></span>
       ${expected != null ? `
@@ -2941,7 +2953,7 @@ function renderCostSection(w) {
         <input class="wl-input wl-input--num" placeholder="금액" inputmode="numeric" data-draft="costAmount" data-work="${w.id}" data-enter-action="addWorkCost" value="${escapeAttr(costDraft.amount || "")}" />
         <button class="wl-btn wl-btn--ghost" data-action="addWorkCost" data-work="${w.id}">${ICONS.check}</button>
         <button class="wl-btn wl-btn--ghost" data-action="toggleCostForm" data-work="${w.id}">${ICONS.x}</button>
-      </div>` : `<button class="wl-cost-toggle" data-action="toggleCostForm" data-work="${w.id}">${ICONS.plus} 비용 추가</button>`}`;
+      </div>` : `<button class="wl-cost-toggle" data-action="toggleCostForm" data-work="${w.id}">${ICONS.plus} 비용 추가</button>`}`}`;
 }
 
 // ---- render: works-manage tab ----
@@ -3010,7 +3022,11 @@ function renderWorkManageCard(w) {
         </div>`}
         ${renderCostSection(w)}
         ${(w.updates || []).length > 0 ? `
-          <div class="wl-card-title" style="margin-top:14px">세션 기록</div>
+          <button class="wl-goal-cat-toggle wl-section-toggle" data-action="toggleLogSection" data-work="${w.id}">
+            <span class="wl-goal-cat-name">세션 기록 <span class="wl-section-count">${w.updates.length}</span></span>
+            <span class="wl-goal-cat-toggle-icon ${openLogWorks.has(w.id) ? "is-expanded" : ""}">${ICONS.chevron}</span>
+          </button>
+          ${!openLogWorks.has(w.id) ? "" : `
           <ul class="wl-session-log">
             ${w.updates.map((u) => {
               const block = u.blockId ? findBlockById(u.blockId) : null;
@@ -3047,7 +3063,7 @@ function renderWorkManageCard(w) {
                 <button class="wl-icon-btn wl-session-log-more ${open ? "is-open" : ""}" data-action="toggleUpdateTools" data-update="${u.id}" aria-label="${open ? "닫기" : "고치기"}" title="${open ? "닫기" : "고치기"}">⋯</button>
               </li>`;
             }).join("")}
-          </ul>` : ""}
+          </ul>`}` : ""}
       `}
     </section>`;
 }
@@ -3913,6 +3929,15 @@ function runAction(name, ds) {
     case "addWorkCost": addWorkCost(ds.work); break;
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
+    case "toggleCostSection":
+      toggleInSet(openCostWorks, ds.work);
+      render();
+      break;
+    case "toggleLogSection":
+      toggleInSet(openLogWorks, ds.work);
+      if (!openLogWorks.has(ds.work)) openUpdateId = null;
+      render();
+      break;
     case "toggleUpdateTools":
       openUpdateId = openUpdateId === ds.update ? null : ds.update;
       editingBlockId = null;   // 다른 줄을 열면 고치던 소요시간은 접습니다
