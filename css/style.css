@@ -397,6 +397,10 @@ body {
   display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--wl-border);
   color: var(--wl-text-muted); font-size: 12px; padding: 10px 12px; border-radius: 2px; cursor: pointer; flex-shrink: 0;
 }
+.wl-imgpick-row { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+/* 클립보드에서 바로 붙여넣는 쪽. 파일 고르기와 나란히 서는 같은 크기의 칸입니다. */
+.wl-imgpick--paste { background: none; font-family: inherit; }
+.wl-imgpick--paste:hover { color: var(--wl-text); }
 .wl-imgpick.has-image { border-style: solid; padding: 0; position: relative; width: 42px; height: 42px; }
 .wl-imgpick-preview { width: 42px; height: 42px; object-fit: cover; display: block; border-radius: 2px; }
 .wl-imgpick-clear {
