@@ -6,7 +6,14 @@ import {
 // ---- config ----
 const WORK_MIN = 50;
 const BREAK_MIN = 10;
-const OFFDAY_COST = 15;
+// 15점일 때는 하루 2시간 반만 일해도 4~5일마다 한 장이 찼습니다. 주 5일 기준
+// 주 1.6일치 휴무라 너무 헐했어요. 30점이면 같은 페이스로 8~9일에 한 장이고,
+// 열심히 한 날 페이스(순증 10점)면 사흘에 한 장입니다 — 많이 할수록 빨리
+// 버는 구조는 그대로 둡니다. 그게 이 장부의 목적이라서요.
+const OFFDAY_COST = 30;
+// 예전에 쓴 휴무권의 값. 로그에 숫자만 남아 있던 시절 기록을 그때 가격으로
+// 읽기 위해 남겨둡니다.
+const LEGACY_OFFDAY_COST = 15;
 const SPEND_INCLUDED_MIN = 60; // a preset's points buy this much time up front
 const SPEND_MIN_PER_POINT = 10; // past the included time: 1 more point per 10 minutes
 const SIZE_WARN_BYTES = 900 * 1024; // Contents API caps file writes around 1MB
@@ -248,6 +255,9 @@ function normalizeState(s) {
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
   s.habits = (s.habits || []).map((h) => ({ ...h, pinned: h.pinned === true, retiredAt: h.retiredAt || null }));
   s.habitLog = s.habitLog || {};
+  // 예전에는 타임스탬프 숫자만 넣었습니다. 그때 산 값은 15점이었으니 그대로 둡니다.
+  s.offDayLog = (s.offDayLog || []).map((e) =>
+    typeof e === "number" ? { at: e, cost: LEGACY_OFFDAY_COST } : e);
   s.weeklyGoals = s.weeklyGoals || {};
   s.monthlyGoals = s.monthlyGoals || {};
   if (typeof s.goalRate !== "number" || !(s.goalRate > 0)) s.goalRate = DEFAULT_GOAL_RATE;
@@ -1247,7 +1257,8 @@ function stopSpendTimer() {
 function useOffDay() {
   if (state.savings < OFFDAY_COST) return;
   state.savings -= OFFDAY_COST;
-  state.offDayLog.push(Date.now());
+  // 값을 같이 남깁니다. 가격이 또 바뀌어도 지난 기록이 그때 값 그대로 읽히게요.
+  state.offDayLog.push({ at: Date.now(), cost: OFFDAY_COST });
   persistAndRender();
 }
 function toggleSpendPresetsEdit() {
@@ -2514,11 +2525,11 @@ function renderSavingsCard() {
       <div class="wl-card-title">사용 기록</div>
       ${state.offDayLog.length === 0 ? `<div class="wl-empty">아직 없어요.</div>` : ""}
       <ul class="wl-log">
-        ${[...state.offDayLog].reverse().map((ts) => `
+        ${[...state.offDayLog].reverse().map((e) => `
           <li class="wl-log-row wl-log-row--save">
-            <span class="wl-log-time">${escapeHtml(formatKDate(new Date(ts)))}</span>
+            <span class="wl-log-time">${escapeHtml(formatKDate(new Date(e.at)))}</span>
             <span class="wl-log-label">휴무권 사용</span>
-            <span class="wl-log-points">-${OFFDAY_COST}</span>
+            <span class="wl-log-points">-${e.cost}</span>
           </li>`).join("")}
       </ul>
     </section>`;
