@@ -511,6 +511,10 @@ body {
 .wl-session-log-duration.is-editing { color: var(--wl-text); flex-wrap: wrap; }
 /* 고치는 도구들은 ⋯ 를 누른 줄에서만 나옵니다. 기록마다 버튼이 넷씩 서 있으면
    목록이 버튼 벽이 돼서요. */
+/* 할일 카드 안의 접이식 구획 머리(비용 · 세션 기록). 접혀 있을 때도 얼마인지
+   몇 건인지는 보이게 숫자를 옆에 답니다. */
+.wl-section-toggle { margin-top: 14px; }
+.wl-section-count { color: var(--wl-text-muted); font-weight: 400; }
 .wl-session-log-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .wl-session-log-tools .wl-session-log-duration { margin-top: 0; }
 .wl-session-log-tools .wl-session-log-duration svg { width: 13px; height: 13px; }
