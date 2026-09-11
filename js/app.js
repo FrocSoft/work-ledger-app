@@ -158,6 +158,44 @@ function escapeHtml(str) {
 }
 const escapeAttr = escapeHtml;
 
+// 클립보드에 있는 사진을 바로 가져옵니다. 맥에서 화면을 캡처하면 파일 없이
+// 클립보드에만 들어가는데, 그걸 쓰려고 매번 파일로 저장하는 게 번거로워서요.
+// resizeImageFile은 FileReader를 쓰므로 File이든 Blob이든 그대로 받습니다.
+// 못 가져온 이유를 구분해 돌려주고, 알리는 건 부르는 쪽이 합니다.
+async function readClipboardImage() {
+  if (!navigator.clipboard || !navigator.clipboard.read) return { error: "unsupported" };
+  let items;
+  try {
+    items = await navigator.clipboard.read();
+  } catch (e) {
+    // 권한을 막았거나 사용자 제스처 밖에서 불린 경우
+    return { error: e && e.name === "NotAllowedError" ? "denied" : "failed" };
+  }
+  for (const item of items) {
+    const type = item.types.find((t) => t.startsWith("image/"));
+    if (!type) continue;
+    try {
+      return { dataUrl: await resizeImageFile(await item.getType(type)) };
+    } catch (e) {
+      return { error: "failed" };
+    }
+  }
+  return { error: "empty" };
+}
+const CLIPBOARD_ERRORS = {
+  unsupported: "이 브라우저는 클립보드에서 바로 붙여넣기를 못 해요. 옆의 사진 버튼으로 골라주세요.",
+  denied: "클립보드 읽기를 허용해야 붙여넣을 수 있어요.",
+  empty: "클립보드에 사진이 없어요.",
+  failed: "붙여넣기에 실패했어요. 사진 버튼으로 골라주세요.",
+};
+// 붙여넣은 사진을 어디에 넣을지는 부른 버튼이 들고 있습니다 — 화면에 사진칸이
+// 여럿이라 "지금 고른 칸" 같은 걸 두면 헷갈려서요.
+async function pasteImageInto(apply) {
+  const { dataUrl, error } = await readClipboardImage();
+  if (error) { window.alert(CLIPBOARD_ERRORS[error]); return; }
+  apply(dataUrl);
+}
+
 function resizeImageFile(file, maxDim = 420, quality = 0.62) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1855,7 +1893,7 @@ function figure(label, value, accent) {
   return `<div class="wl-figure"><div class="wl-figure-label">${escapeHtml(label)}</div><div class="wl-figure-value ${accent ? `is-${accent}` : ""}">${value}</div></div>`;
 }
 
-function renderImagePicker({ value, pickAction, clearAction, work, cat }) {
+function renderImagePicker({ value, pickAction, pasteAction, clearAction, work, cat }) {
   const extra = `${work ? ` data-work="${work}"` : ""}${cat ? ` data-cat="${cat}"` : ""}`;
   if (value) {
     return `
@@ -1865,11 +1903,14 @@ function renderImagePicker({ value, pickAction, clearAction, work, cat }) {
       </div>`;
   }
   return `
-    <label class="wl-imgpick">
-      <input type="file" accept="image/*" hidden data-filepick="${pickAction}"${extra} />
-      ${ICONS.image}
-      <span>사진</span>
-    </label>`;
+    <div class="wl-imgpick-row">
+      <label class="wl-imgpick">
+        <input type="file" accept="image/*" hidden data-filepick="${pickAction}"${extra} />
+        ${ICONS.image}
+        <span>사진</span>
+      </label>
+      <button type="button" class="wl-imgpick wl-imgpick--paste" data-action="${pasteAction}"${extra}>붙여넣기</button>
+    </div>`;
 }
 
 // ---- render: column 1 — time block ----
@@ -2000,7 +2041,7 @@ function renderSessionUpdateComposer(workId, subtaskId) {
       <div class="wl-hint">방금 세션 기록 — "기록"을 누르면 바로 저장되고, 안 눌러도 휴식을 끝낼 때 저장돼요</div>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="무엇을 했나요?" data-draft="pendingUpdateText" data-enter-action="savePendingUpdate" value="${escapeAttr(draft.text)}" />
-        ${renderImagePicker({ value: draft.image || null, pickAction: "pickPendingUpdateImage", clearAction: "clearPendingUpdateImage" })}
+        ${renderImagePicker({ value: draft.image || null, pickAction: "pickPendingUpdateImage", pasteAction: "pastePendingUpdateImage", clearAction: "clearPendingUpdateImage" })}
       </div>
       <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
         <input class="wl-input wl-input--sm" placeholder="쓴 비용 (선택)" data-draft="pendingUpdateCostLabel" value="${escapeAttr(draft.costLabel)}" />
@@ -2992,6 +3033,7 @@ function renderWorkManageCard(w) {
                       <input type="file" accept="image/*" hidden data-filepick="pickUpdateImage" data-work="${w.id}" data-update="${u.id}" />
                       ${ICONS.image} ${u.image ? "사진 바꾸기" : "사진 추가"}
                     </label>
+                    <button class="wl-session-log-duration" data-action="pasteUpdateImage" data-work="${w.id}" data-update="${u.id}">붙여넣기</button>
                     ${u.image ? `<button class="wl-session-log-duration" data-action="removeWorkUpdateImage" data-work="${w.id}" data-update="${u.id}">${ICONS.x} 사진 빼기</button>` : ""}
                   </div>
                 </div>
@@ -3137,7 +3179,7 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
         <input class="wl-input wl-input--sm" placeholder="가격대 이름" data-draft="tierLabel" data-cat="${c.id}" value="${escapeAttr(draft.label || "")}" />
         <input class="wl-input wl-input--num" placeholder="실제 가격" inputmode="numeric" data-draft="tierActualPrice" data-cat="${c.id}" value="${escapeAttr(draft.actualPrice || "")}" />
         ${c.kind === "essential" ? `<input class="wl-input wl-input--sm" type="date" title="언제까지 필요한가" data-draft="tierDueDate" data-cat="${c.id}" value="${escapeAttr(draft.dueDate || "")}" />` : ""}
-        ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", clearAction: "clearTierImage", cat: c.id })}
+        ${renderImagePicker({ value: draft.image || null, pickAction: "pickTierImage", pasteAction: "pasteTierImage", clearAction: "clearTierImage", cat: c.id })}
         <button class="wl-btn wl-btn--ghost" data-action="addTier" data-cat="${c.id}">${draft.editingId ? ICONS.check : ICONS.plus} ${draft.editingId ? "저장" : ""}</button>
         ${draft.editingId ? `<button class="wl-btn wl-btn--ghost" data-action="cancelEditTier" data-cat="${c.id}">${ICONS.x}</button>` : ""}
       </div>
@@ -3865,11 +3907,17 @@ function runAction(name, ds) {
     case "removeWorkCost": removeWorkCost(ds.work, ds.cost); break;
     case "removeWorkUpdate": removeWorkUpdate(ds.work, ds.update); break;
     case "removeWorkUpdateImage": removeWorkUpdateImage(ds.work, ds.update); break;
+    case "pasteUpdateImage":
+      pasteImageInto((url) => setWorkUpdateImage(ds.work, ds.update, url));
+      break;
     case "editBlockMinutes": startEditBlockMinutes(ds.block); break;
     case "saveEditBlockMinutes": saveEditBlockMinutes(); break;
     case "cancelEditBlockMinutes": cancelEditBlockMinutes(); break;
     case "toggleCostForm": toggleCostForm(ds.work); break;
     case "clearPendingUpdateImage": drafts.pendingUpdate.image = null; render(); break;
+    case "pastePendingUpdateImage":
+      pasteImageInto((url) => { drafts.pendingUpdate.image = url; render(); });
+      break;
     case "togglePendingSubtaskDone": drafts.pendingUpdate.subtaskDone = !drafts.pendingUpdate.subtaskDone; render(); break;
     case "savePendingUpdate": savePendingSessionUpdate(); break;
     case "addRevenue": addRevenue(); break;
@@ -3886,6 +3934,12 @@ function runAction(name, ds) {
     case "clearTierImage":
       drafts.newTier[ds.cat] = { ...(drafts.newTier[ds.cat] || {}), image: null };
       render();
+      break;
+    case "pasteTierImage":
+      pasteImageInto((url) => {
+        drafts.newTier[ds.cat] = { ...(drafts.newTier[ds.cat] || {}), image: url };
+        render();
+      });
       break;
     case "addToQueue": addToQueue(); break;
     case "removeFromQueue": removeFromQueue(ds.id); break;
