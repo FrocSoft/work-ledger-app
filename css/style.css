@@ -232,6 +232,10 @@ body {
 .wl-wip-toggle.is-on { border-color: var(--wl-work); color: var(--wl-work); }
 .wl-aging { font-size: 10.5px; color: var(--wl-text-muted); white-space: nowrap; flex: 0 0 auto; }
 .wl-aging.is-stale { color: var(--wl-spend); }
+/* 마감이 일주일 안쪽이거나 지났을 때만 색을 씁니다. 늘 빨갛게 두면 급한 게
+   급해 보이지 않아요. */
+.wl-aging.is-due { color: var(--wl-spend); font-weight: 600; }
+.wl-work-due.is-due { color: var(--wl-spend); font-weight: 600; }
 .wl-backlog-row { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; font-size: 12.5px; }
 .wl-backlog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--wl-text-muted); }
 
