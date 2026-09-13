@@ -3004,8 +3004,10 @@ function renderWorkManageCard(w) {
               <option value="">태그 없음</option>
               ${state.tags.map((t) => `<option value="${t.id}" ${editingWorkDraft.tagId === t.id ? "selected" : ""}>${escapeHtml(t.name)} (${t.points}점)</option>`).join("")}
             </select>
-            <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
-            <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
+            <div class="wl-field-btns">
+              <button class="wl-icon-btn" data-action="saveEditWork">${ICONS.check}</button>
+              <button class="wl-icon-btn" data-action="cancelEditWork">${ICONS.x}</button>
+            </div>
           </div>` : `
           <div class="wl-work-head-left">
             <span data-drag-handle="work" class="wl-drag-handle" title="드래그해서 순서 변경">${ICONS.grip}</span>
