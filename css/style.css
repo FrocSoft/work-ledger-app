@@ -148,7 +148,19 @@ body {
 
 .wl-field-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .wl-field-row--tight { margin-bottom: 0; margin-top: 10px; }
+/* --wrap을 붙여놔도 줄바꿈이 안 됐습니다. 칸들이 min-width:0이라 넘치질 않고
+   끝없이 줄어들기만 했거든요 — 390px에서 이름칸이 49px까지 쪼그라들었습니다.
+   최소 폭을 줘야 넘쳐서 다음 줄로 갑니다. 좁은 화면에서 줄 수가 늘어나는 건
+   감수합니다. 글자 한 자도 안 보이는 칸보다는 나아요. */
 .wl-field-row--wrap { flex-wrap: wrap; }
+.wl-field-row--wrap > .wl-input { min-width: 150px; }
+.wl-field-row--wrap > .wl-input--num { min-width: 92px; }
+.wl-field-row--wrap > .wl-input[type="date"],
+.wl-field-row--wrap > .wl-input[type="time"] { min-width: 130px; }
+.wl-field-row--wrap > .wl-select { min-width: 120px; }
+.wl-field-row--wrap > .wl-btn { flex-shrink: 0; }
+/* 확인·취소처럼 짝인 아이콘 버튼은 갈라져서 줄이 나뉘면 안 됩니다. */
+.wl-field-btns { display: flex; gap: 8px; flex-shrink: 0; }
 
 .wl-input {
   flex: 1;
