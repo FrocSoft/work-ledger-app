@@ -289,7 +289,7 @@ function normalizeState(s) {
       .map((w) => w.id);
     s.works.forEach((w) => { w.wip = recent.includes(w.id); });
   }
-  s.works.forEach((w) => { w.wip = w.wip === true; });
+  s.works.forEach((w) => { w.wip = w.wip === true; w.dueDate = w.dueDate || null; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
   s.habits = (s.habits || []).map((h) => ({ ...h, pinned: h.pinned === true, retiredAt: h.retiredAt || null }));
   s.habitLog = s.habitLog || {};
@@ -368,6 +368,7 @@ let editingPresetDraft = { label: "", cost: "" };
 const drafts = {
   newWorkName: "",
   newWorkExpected: "",
+  newWorkDue: "",
   newWorkTag: "",
   newSubtask: {},
   newTagName: "",
@@ -1354,11 +1355,12 @@ function addWork() {
   const expectedSalePrice = drafts.newWorkExpected ? Number(drafts.newWorkExpected) : null;
   state.works.push({
     id: uid(), name, subtasks: [], updates: [], costs: [], expectedSalePrice, archived: false,
-    tagId: drafts.newWorkTag || null,
+    tagId: drafts.newWorkTag || null, dueDate: drafts.newWorkDue || null,
   });
   drafts.newWorkName = "";
   drafts.newWorkExpected = "";
   drafts.newWorkTag = "";
+  drafts.newWorkDue = "";
   persistAndRender();
 }
 function removeWork(id) {
@@ -1371,7 +1373,7 @@ function startEditWork(workId) {
   editingWorkId = workId;
   editingWorkDraft = {
     name: w.name, expectedSalePrice: w.expectedSalePrice != null ? String(w.expectedSalePrice) : "",
-    tagId: w.tagId || "",
+    tagId: w.tagId || "", dueDate: w.dueDate || "",
   };
   render();
 }
@@ -1418,6 +1420,7 @@ function saveEditWork() {
   w.name = name;
   w.expectedSalePrice = editingWorkDraft.expectedSalePrice ? Number(editingWorkDraft.expectedSalePrice) : null;
   w.tagId = editingWorkDraft.tagId || null;
+  w.dueDate = editingWorkDraft.dueDate || null;
   editingWorkId = null;
   persistAndRender();
 }
@@ -1527,6 +1530,24 @@ function daysSince(at) {
   const b = new Date(); b.setHours(0, 0, 0, 0);
   return Math.round((b - a) / 86400000);
 }
+// 마감일은 남은 날로 읽는 게 빠릅니다. 날짜만 적혀 있으면 머리로 세야 해서요.
+// 일주일 안쪽부터 색을 바꿔 눈에 걸리게 하고, 그 밖은 날짜만 담담하게 둡니다.
+function daysUntil(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const a = new Date(y, m - 1, d); a.setHours(0, 0, 0, 0);
+  const b = new Date(); b.setHours(0, 0, 0, 0);
+  return Math.round((a - b) / 86400000);
+}
+function dueLabel(w) {
+  if (!w.dueDate) return null;
+  const left = daysUntil(w.dueDate);
+  const short = w.dueDate.slice(5).replace("-", ".").replace(/^0/, "");
+  if (left < 0) return { text: `${-left}일 지남`, urgent: true };
+  if (left === 0) return { text: "오늘까지", urgent: true };
+  if (left <= 7) return { text: `${left}일 남음`, urgent: true };
+  return { text: `${short}까지`, urgent: false };
+}
+
 // 조용히 죽어가는 프로젝트는 "며칠째 안 건드렸나"로만 보입니다.
 function agingLabel(workId) {
   const days = daysSince(workLastTouched(workId));
@@ -2248,11 +2269,15 @@ function renderProjectStatusRow(w) {
   const pct = total ? Math.round((done / total) * 100) : 0;
   const stats = workSessionStats(w.id);
   const aging = agingLabel(w.id);
+  const due = dueLabel(w);
   return `
     <section class="wl-card wl-project-card">
       <div class="wl-work-head">
         <div class="wl-work-name" style="margin-bottom:0">${escapeHtml(w.name)}${workTagBadge(w)}</div>
-        <span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>
+        ${due
+          // 마감이 걸려 있으면 "며칠 전 손댔나"보다 "며칠 남았나"가 먼저입니다.
+          ? `<span class="wl-aging ${due.urgent ? "is-due" : ""}">${due.text}</span>`
+          : `<span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>`}
       </div>
       ${total > 0 ? `
         <div class="wl-progress">
@@ -2297,10 +2322,13 @@ function renderProjectsStatusColumn() {
         <div class="wl-card-title" style="margin-bottom:8px">대기 ${backlog.length}개</div>
         ${backlog.map((w) => {
           const aging = agingLabel(w.id);
+          const due = dueLabel(w);
           return `
           <div class="wl-backlog-row">
             <span class="wl-backlog-name">${escapeHtml(w.name)}</span>
-            <span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>
+            ${due
+              ? `<span class="wl-aging ${due.urgent ? "is-due" : ""}">${due.text}</span>`
+              : `<span class="wl-aging ${aging.stale ? "is-stale" : ""}">${aging.text}</span>`}
           </div>`;
         }).join("")}
       </section>` : ""}`;
@@ -2963,6 +2991,7 @@ function renderWorkManageCard(w) {
   const isEditing = editingWorkId === w.id;
   const collapsed = !!state.collapsedWorks[w.id];
   const stats = workSessionStats(w.id);
+  const due = w.completed ? null : dueLabel(w);
   return `
     <section class="wl-card" data-drag-item="work" data-work="${w.id}">
       <div class="wl-work-head">
@@ -2970,6 +2999,7 @@ function renderWorkManageCard(w) {
           <div class="wl-field-row wl-field-row--tight wl-field-row--wrap" style="flex:1;margin:0">
             <input class="wl-input wl-input--sm" data-draft="editWorkName" value="${escapeAttr(editingWorkDraft.name)}" placeholder="할일 이름" data-enter-action="saveEditWork" />
             <input class="wl-input wl-input--num" data-draft="editWorkExpected" value="${escapeAttr(editingWorkDraft.expectedSalePrice)}" placeholder="판매예상" inputmode="numeric" data-enter-action="saveEditWork" />
+            <input class="wl-input wl-input--sm" type="date" title="마감일" data-draft="editWorkDue" value="${escapeAttr(editingWorkDraft.dueDate)}" />
             <select class="wl-select" data-select="editWorkTag">
               <option value="">태그 없음</option>
               ${state.tags.map((t) => `<option value="${t.id}" ${editingWorkDraft.tagId === t.id ? "selected" : ""}>${escapeHtml(t.name)} (${t.points}점)</option>`).join("")}
@@ -2981,7 +3011,7 @@ function renderWorkManageCard(w) {
             <span data-drag-handle="work" class="wl-drag-handle" title="드래그해서 순서 변경">${ICONS.grip}</span>
             <button class="wl-work-collapse-toggle" data-action="toggleWorkCollapse" data-work="${w.id}">
               <span class="wl-goal-cat-toggle-icon ${!collapsed ? "is-expanded" : ""}">${ICONS.chevron}</span>
-              <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}${stats.minutes > 0 ? `<span class="wl-work-expected"> · 총 ${formatMinutes(stats.minutes)}</span>` : ""}</span>
+              <span class="wl-work-name">${escapeHtml(w.name)}${workTagBadge(w)}${due ? `<span class="wl-work-expected wl-work-due ${due.urgent ? "is-due" : ""}"> · ${due.text}</span>` : ""}${w.expectedSalePrice != null ? `<span class="wl-work-expected"> · 판매예상 ${w.expectedSalePrice.toLocaleString()}원</span>` : ""}${stats.minutes > 0 ? `<span class="wl-work-expected"> · 총 ${formatMinutes(stats.minutes)}</span>` : ""}</span>
             </button>
           </div>
           <div>
@@ -3096,6 +3126,7 @@ function renderWorksManage() {
         <div class="wl-field-row wl-field-row--wrap">
           <input class="wl-input" placeholder="새 할일 이름" data-draft="newWorkName" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkName)}" />
           <input class="wl-input wl-input--num" placeholder="판매예상(선택)" inputmode="numeric" data-draft="newWorkExpected" data-enter-action="addWork" value="${escapeAttr(drafts.newWorkExpected)}" />
+          <input class="wl-input wl-input--sm" type="date" title="마감일(선택)" data-draft="newWorkDue" value="${escapeAttr(drafts.newWorkDue)}" />
           <select class="wl-select" data-select="newWorkTag">
             <option value="">태그 없음</option>
             ${state.tags.map((t) => `<option value="${t.id}" ${drafts.newWorkTag === t.id ? "selected" : ""}>${escapeHtml(t.name)} (${t.points}점)</option>`).join("")}
@@ -4038,6 +4069,8 @@ function onRootInput(e) {
   switch (key) {
     case "newWorkName": drafts.newWorkName = value; break;
     case "newWorkExpected": drafts.newWorkExpected = clampNumeric(); break;
+    case "newWorkDue": drafts.newWorkDue = value; break;
+    case "editWorkDue": editingWorkDraft.dueDate = value; break;
     case "editWorkName": editingWorkDraft.name = value; break;
     case "editWorkExpected": editingWorkDraft.expectedSalePrice = clampNumeric(); break;
     case "newSubtask": drafts.newSubtask[el.dataset.work] = value; break;
