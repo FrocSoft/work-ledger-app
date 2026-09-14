@@ -242,7 +242,7 @@ function defaultState() {
     activeSpend: null,
     cancelledBlock: null,
     payoutRate: DEFAULT_PAYOUT_RATE,
-    habits: [],        // { id, name, pinned, retiredAt, createdAt }
+    habits: [],        // { id, name, pinned, days, retiredAt, createdAt }
     habitLog: {},      // { "2026-09-09": [habitId, ...] }
     weeklyGoals: {},   // { "2026-09-07"(월요일): ["workId:subtaskId", ...] }
     monthlyGoals: {},  // { "2026-09": ["workId", ...] }
@@ -291,7 +291,13 @@ function normalizeState(s) {
   }
   s.works.forEach((w) => { w.wip = w.wip === true; w.dueDate = w.dueDate || null; });
   if (typeof s.payoutRate !== "number" || !(s.payoutRate > 0)) s.payoutRate = DEFAULT_PAYOUT_RATE;
-  s.habits = (s.habits || []).map((h) => ({ ...h, pinned: h.pinned === true, retiredAt: h.retiredAt || null }));
+  s.habits = (s.habits || []).map((h) => ({
+    ...h, pinned: h.pinned === true, retiredAt: h.retiredAt || null,
+    // 요일이 전부 골라져 있으면 "매일"과 같으므로 null로 접어둡니다.
+    days: Array.isArray(h.days) && h.days.length > 0 && h.days.length < 7
+      ? [...new Set(h.days.filter((d) => d >= 0 && d <= 6))].sort()
+      : null,
+  }));
   s.habitLog = s.habitLog || {};
   // 예전에는 타임스탬프 숫자만 넣었습니다. 그때 산 값은 15점이었으니 그대로 둡니다.
   s.offDayLog = (s.offDayLog || []).map((e) =>
@@ -752,33 +758,71 @@ function retiredHabits() {
 function habitDone(habitId, day) {
   return (state.habitLog[day] || []).includes(habitId);
 }
-// 지정 습관은 각 1점, 나머지는 트래킹. 그날 살아있는 습관을 모두 채우면 +1.
+// 요일은 0=일 … 6=토 (Date.getDay와 같게). days가 없으면 매일입니다.
+// 쉬기로 한 날은 "빼먹은 날"이 아니라 애초에 대상이 아닌 날입니다. 그래서
+// 점수도 안 주고, 안 했다고 연속이 끊기지도 않습니다.
+const WEEKDAY_LABELS = ["일", "월", "화", "수", "목", "금", "토"];
+function habitOnDay(h, day) {
+  if (!h.days || h.days.length === 0 || h.days.length === 7) return true;
+  return h.days.includes(dateFromKey(day).getDay());
+}
+function habitsForDay(day) {
+  return activeHabits().filter((h) => habitOnDay(h, day));
+}
+// 지정 습관은 각 1점, 나머지는 트래킹. 그날 대상인 습관을 모두 채우면 +1.
 // 상한이 구조로 잡혀서(지정 2개) 개수로 점수를 벌 수 없습니다.
 function habitPointsFor(day) {
   const done = state.habitLog[day] || [];
   if (done.length === 0) return 0;
-  const live = activeHabits();
-  const pinned = live.filter((h) => h.pinned && done.includes(h.id)).length;
-  const all = live.length > 0 && live.every((h) => done.includes(h.id));
+  const due = habitsForDay(day);
+  const pinned = due.filter((h) => h.pinned && done.includes(h.id)).length;
+  const all = due.length > 0 && due.every((h) => done.includes(h.id));
   return pinned + (all ? 1 : 0);
 }
 // 유예는 두지 않습니다. 대신 최고 기록이 남아서, 끊겨도 세운 건 안 사라집니다.
+// 대상이 아닌 날은 세지도 끊지도 않고 그냥 지나갑니다.
 function habitStreak(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h) return 0;
   let d = new Date();
-  if (!habitDone(habitId, todayKey(d))) d = addDays(d, -1); // 오늘 아직이면 어제부터
+  // 오늘이 대상인데 아직 안 했으면 어제부터 셉니다.
+  if (habitOnDay(h, todayKey(d)) && !habitDone(habitId, todayKey(d))) d = addDays(d, -1);
   let n = 0;
-  while (habitDone(habitId, todayKey(d))) { n += 1; d = addDays(d, -1); }
+  // 대상인 날을 거슬러 올라가다 빠진 날을 만나면 멈춥니다. 안전장치로 2년치.
+  for (let i = 0; i < 730; i += 1) {
+    const key = todayKey(d);
+    if (habitOnDay(h, key)) {
+      if (!habitDone(habitId, key)) break;
+      n += 1;
+    }
+    d = addDays(d, -1);
+  }
   return n;
 }
 function habitBestStreak(habitId) {
+  const h = state.habits.find((x) => x.id === habitId);
   const days = Object.keys(state.habitLog).filter((k) => state.habitLog[k].includes(habitId)).sort();
+  if (days.length === 0) return 0;
   let best = 0, run = 0, prev = null;
   days.forEach((k) => {
-    run = prev && todayKey(addDays(dateFromKey(prev), 1)) === k ? run + 1 : 1;
+    // 앞선 수행일과 이 날 사이에 대상인 날이 하나도 없었으면 이어진 것으로 봅니다.
+    let joined = false;
+    if (prev) {
+      joined = true;
+      for (let d = addDays(dateFromKey(prev), 1); todayKey(d) < k; d = addDays(d, 1)) {
+        if (!h || habitOnDay(h, todayKey(d))) { joined = false; break; }
+      }
+    }
+    run = joined ? run + 1 : 1;
     if (run > best) best = run;
     prev = k;
   });
   return best;
+}
+// 대상인 날만 셉니다 — 주 3회 습관을 30일로 나누면 늘 초라해 보여서요.
+function habitDueDays(habitId, keys) {
+  const h = state.habits.find((x) => x.id === habitId);
+  return h ? keys.filter((k) => habitOnDay(h, k)) : keys;
 }
 function habitCountBetween(habitId, keys) {
   return keys.filter((k) => habitDone(habitId, k)).length;
@@ -799,6 +843,18 @@ function addHabit() {
     retiredAt: null, createdAt: Date.now(),
   });
   drafts.newHabit = "";
+  persistAndRender();
+}
+// 전부 끄는 건 막습니다 — 아무 날도 아닌 습관은 습관이 아니고, 그럴 거면
+// 정착시키거나 지우면 되니까요.
+function toggleHabitDay(habitId, weekday) {
+  const h = state.habits.find((x) => x.id === habitId);
+  if (!h) return;
+  const d = Number(weekday);
+  const cur = h.days && h.days.length ? h.days : [0, 1, 2, 3, 4, 5, 6];
+  const next = cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d].sort();
+  if (next.length === 0) return;
+  h.days = next.length === 7 ? null : next;
   persistAndRender();
 }
 function toggleHabitPinned(habitId) {
@@ -2396,13 +2452,41 @@ function renderSpendPresetsEditor() {
 }
 
 
+// 매일 하는 습관에는 아무것도 안 붙입니다. 요일을 고른 것만 표시해요.
+function habitDaysBadge(h) {
+  if (!h.days || h.days.length === 0 || h.days.length === 7) return "";
+  const text = h.days.map((d) => WEEKDAY_LABELS[d]).join("");
+  return ` <span class="wl-habit-days">${escapeHtml(text)}</span>`;
+}
+// 칩은 월요일부터 늘어놓습니다. 달력을 그렇게 읽으니까요.
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
+function renderHabitDayPicker(h) {
+  return `
+    <div class="wl-habit-days-pick">
+      ${WEEK_ORDER.map((d) => `
+        <button class="wl-day-chip ${habitOnDay(h, todayKey(nextDateWithDay(d))) ? "is-on" : ""}"
+                data-action="toggleHabitDay" data-habit="${h.id}" data-day="${d}">${WEEKDAY_LABELS[d]}</button>`).join("")}
+    </div>`;
+}
+// 요일 하나를 대표하는 날짜 — 칩이 켜졌는지 보려고 habitOnDay에 넘깁니다.
+function nextDateWithDay(weekday) {
+  const d = new Date();
+  d.setDate(d.getDate() + ((weekday - d.getDay() + 7) % 7));
+  return d;
+}
+
 // 오늘의 체크. 지정 습관(점수 받는 것)은 점수를 표시하고, 나머지는 기록만.
 function renderHabitsCard() {
   const live = activeHabits();
   const retired = retiredHabits();
   const day = todayKey();
   const gained = habitPointsFor(day);
-  const allDone = live.length > 0 && live.every((h) => habitDone(h.id, day));
+  // 오늘 대상인 것만 체크 목록에 세웁니다. 쉬는 날인 습관까지 빈 칸으로 서 있으면
+  // 안 한 것처럼 보여서요. 고칠 때는 전부 보여야 요일을 바꿀 수 있습니다.
+  const due = habitsForDay(day);
+  const shown = habitEditOpen ? live : due;
+  const off = live.length - due.length;
+  const allDone = due.length > 0 && due.every((h) => habitDone(h.id, day));
   if (live.length === 0 && retired.length === 0 && !habitEditOpen) {
     return `
       <section class="wl-card">
@@ -2419,18 +2503,22 @@ function renderHabitsCard() {
         <div class="wl-card-title" style="margin-bottom:0">습관${live.length > 0 ? ` <span class="wl-wip-count ${allDone ? "is-full" : ""}">오늘 ${gained}점</span>` : ""}</div>
         <button class="wl-icon-btn" data-action="toggleHabitEdit">${habitEditOpen ? ICONS.check : ICONS.pencil}</button>
       </div>
-      ${live.length === 0 ? `<div class="wl-empty">진행 중인 습관이 없어요.</div>` : `
+      ${shown.length === 0 ? `<div class="wl-empty">${live.length === 0 ? "진행 중인 습관이 없어요." : "오늘은 쉬는 날로 해둔 습관뿐이에요."}</div>` : `
         <ul class="wl-habit-list">
-          ${live.map((h) => {
+          ${shown.map((h) => {
             const on = habitDone(h.id, day);
             const cur = habitStreak(h.id);
             const best = habitBestStreak(h.id);
+            const today = habitOnDay(h, day);
             return `
-            <li class="wl-habit-row">
-              <button class="wl-checkbox ${on ? "is-done" : ""}" data-action="toggleHabitToday" data-habit="${h.id}">${on ? ICONS.check : ""}</button>
+            <li class="wl-habit-row ${today ? "" : "is-offday"}">
+              ${today
+                ? `<button class="wl-checkbox ${on ? "is-done" : ""}" data-action="toggleHabitToday" data-habit="${h.id}">${on ? ICONS.check : ""}</button>`
+                : `<span class="wl-checkbox is-offday"></span>`}
               <div class="wl-habit-body">
-                <div class="wl-habit-name ${on ? "is-done" : ""}">${escapeHtml(h.name)}${h.pinned ? ` <span class="wl-habit-pin">1점</span>` : ""}</div>
-                <div class="wl-hint">${cur > 0 ? `${cur}일 연속` : "연속 끊김"}${best > 0 ? ` · 최고 ${best}일` : ""}</div>
+                <div class="wl-habit-name ${on ? "is-done" : ""}">${escapeHtml(h.name)}${h.pinned ? ` <span class="wl-habit-pin">1점</span>` : ""}${habitDaysBadge(h)}</div>
+                <div class="wl-hint">${today ? "" : "오늘은 쉬는 날 · "}${cur > 0 ? `${cur}일 연속` : "연속 끊김"}${best > 0 ? ` · 최고 ${best}일` : ""}</div>
+                ${habitEditOpen ? renderHabitDayPicker(h) : ""}
               </div>
               ${habitEditOpen ? `
                 <button class="wl-wip-toggle ${h.pinned ? "is-on" : ""}" data-action="toggleHabitPinned" data-habit="${h.id}" title="점수 지정">${h.pinned ? "지정" : "트래킹"}</button>
@@ -2439,7 +2527,8 @@ function renderHabitsCard() {
             </li>`;
           }).join("")}
         </ul>
-        ${allDone ? `<div class="wl-hint" style="margin-top:8px">오늘 전부 채웠어요 · 보너스 +1점</div>` : ""}`}
+        ${allDone ? `<div class="wl-hint" style="margin-top:8px">오늘 전부 채웠어요 · 보너스 +1점</div>` : ""}
+        ${!habitEditOpen && off > 0 ? `<div class="wl-hint" style="margin-top:8px">오늘 쉬는 습관 ${off}개는 숨겼어요</div>` : ""}`}
       ${habitEditOpen ? `
         <div class="wl-field-row wl-field-row--tight">
           <input class="wl-input wl-input--sm" placeholder="새 습관" data-draft="newHabit" data-enter-action="addHabit" value="${escapeAttr(drafts.newHabit)}" ${live.length >= HABIT_LIST_MAX ? "disabled" : ""} />
@@ -3369,11 +3458,16 @@ function buildExport() {
   Object.keys(state.spendsByDate).sort().forEach((day) => {
     (state.spendsByDate[day] || []).forEach((sp) => spends.push([day, sp.label, sp.cost]));
   });
-  const habits = [["날짜", "습관", "지정"]];
+  // 요일까지 넣습니다. 안 그러면 "토요일에 왜 비었나"를 분석하는 쪽에서 알 수 없어요.
+  const habits = [["날짜", "요일", "습관", "지정", "하는요일"]];
   Object.keys(state.habitLog).sort().forEach((day) => {
     (state.habitLog[day] || []).forEach((id) => {
       const h = state.habits.find((x) => x.id === id);
-      habits.push([day, h ? h.name : id, h && h.pinned ? "예" : ""]);
+      habits.push([
+        day, WEEKDAY_LABELS[dateFromKey(day).getDay()], h ? h.name : id,
+        h && h.pinned ? "예" : "",
+        h && h.days ? h.days.map((d) => WEEKDAY_LABELS[d]).join("") : "매일",
+      ]);
     });
   });
   const works = [["할일", "태그", "상태", "판매예상", "실수령예상", "쓴비용", "판매됨"]];
@@ -3743,17 +3837,18 @@ function renderLogView() {
       ${(() => {
         const live = activeHabits();
         if (live.length === 0) return "";
-        const span = keys.length;
         return `
         <section class="wl-card">
           <div class="wl-card-title">습관</div>
           <div class="wl-logbars">
             ${live.map((h) => {
+              // 분모는 기간 전체가 아니라 그 습관이 하기로 한 날 수입니다.
+              const span = habitDueDays(h.id, keys).length;
               const n = habitCountBetween(h.id, keys);
               return `
               <div class="wl-logbar">
-                <span class="wl-logbar-label is-wide">${escapeHtml(h.name)}</span>
-                <span class="wl-logbar-track"><span class="wl-logbar-fill" style="width:${Math.round((n / span) * 100)}%"></span></span>
+                <span class="wl-logbar-label is-wide">${escapeHtml(h.name)}${habitDaysBadge(h)}</span>
+                <span class="wl-logbar-track"><span class="wl-logbar-fill" style="width:${span > 0 ? Math.round((n / span) * 100) : 0}%"></span></span>
                 <span class="wl-logbar-value">${n}/${span}일</span>
               </div>`;
             }).join("")}
@@ -3901,6 +3996,7 @@ function runAction(name, ds) {
     case "toggleHabitEdit": habitEditOpen = !habitEditOpen; render(); break;
     case "toggleHabitToday": toggleHabitToday(ds.habit); break;
     case "toggleHabitPinned": toggleHabitPinned(ds.habit); break;
+    case "toggleHabitDay": toggleHabitDay(ds.habit, ds.day); break;
     case "addHabit": addHabit(); break;
     case "retireHabit": retireHabit(ds.habit); break;
     case "unretireHabit": unretireHabit(ds.habit); break;

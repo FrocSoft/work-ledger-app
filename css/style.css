@@ -674,3 +674,16 @@ body {
     align-items: start;
   }
 }
+
+/* 습관 요일 — 매일 하는 것에는 안 붙고, 골라둔 것만 표시합니다. */
+.wl-habit-days { font-size: 10px; color: var(--wl-text-muted); border: 1px solid var(--wl-border); border-radius: 8px; padding: 1px 5px; vertical-align: middle; }
+.wl-habit-days-pick { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.wl-day-chip {
+  min-width: 28px; padding: 4px 0; text-align: center;
+  background: none; border: 1px solid var(--wl-border); border-radius: 3px;
+  color: var(--wl-text-muted); font-family: inherit; font-size: 11.5px; cursor: pointer;
+}
+.wl-day-chip.is-on { color: var(--wl-work); border-color: var(--wl-work); }
+/* 오늘 쉬는 습관은 고치는 중에만 보이고, 체크할 수 없다는 게 드러나야 합니다. */
+.wl-habit-row.is-offday .wl-habit-name { color: var(--wl-text-muted); }
+.wl-checkbox.is-offday { opacity: .3; }
