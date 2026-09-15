@@ -393,7 +393,6 @@ const drafts = {
   newCategoryName: "",
   newTier: {},
   newCost: {},
-  queueDraft: { task: "", workId: "", subtaskId: "", extraLinks: [] },
   switchDraft: { task: "", workId: "", subtaskId: "" },
   manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
   manualSpend: { label: "", cost: "", date: "", time: "", minutes: "" },
@@ -1250,37 +1249,41 @@ function removeBlock(blockId) {
   persistAndRender();
 }
 
-function addToQueue() {
-  const task = drafts.queueDraft.task.trim();
-  if (!task) return;
-  // 만들면 바로 시간축 위에 놓습니다. "아직 시각 없는 것"을 따로 모아두면
-  // 같은 블록이 두 곳에 사는 셈이라, 자리는 언제나 시간축이 하나 가집니다.
+// + 를 누르면 곧바로 팝업에서 적습니다. 이름을 먼저 치고 연결을 고르고
+// 추가를 누르는 순서가 번거로웠어요. 만들기와 고치기가 같은 화면입니다.
+function addBlock() {
   const min = nextFreeSlotMinute();
   if (min == null) { window.alert("오늘 남은 자리가 없어요."); return; }
-  state.queue.push({
-    id: uid(), task, workId: drafts.queueDraft.workId || null, subtaskId: drafts.queueDraft.subtaskId || null,
-    at: msAtMinute(min),
-    extraLinks: drafts.queueDraft.extraLinks
-      .filter((l) => l.workId && l.workId !== drafts.queueDraft.workId)
-      .map((l) => ({ workId: l.workId, subtaskId: l.subtaskId || null })),
-  });
-  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraLinks: [] };
+  const item = { id: uid(), task: "", workId: null, subtaskId: null, extraLinks: [], at: msAtMinute(min) };
+  state.queue.push(item);
   sortQueueByTime();
+  editingPlanId = item.id;
   persistAndRender();
 }
 // Extra 할일 planned into one block. Each gets the same 할일/하위 할일 pair as
 // the first one, and they become one-tap switch targets once the block starts.
-function addQueueExtraLink() {
-  drafts.queueDraft.extraLinks.push({ workId: "", subtaskId: "" });
+function addPlanExtraLink() {
+  const q = state.queue.find((x) => x.id === editingPlanId);
+  if (!q) return;
+  q.extraLinks = [...(q.extraLinks || []), { workId: "", subtaskId: "" }];
   render();
 }
-function removeQueueExtraLink(index) {
-  drafts.queueDraft.extraLinks.splice(Number(index), 1);
-  render();
+function removePlanExtraLink(index) {
+  const q = state.queue.find((x) => x.id === editingPlanId);
+  if (!q) return;
+  q.extraLinks.splice(Number(index), 1);
+  persistAndRender();
 }
 function removeFromQueue(id) {
   if (editingPlanId === id) editingPlanId = null;
   state.queue = state.queue.filter((q) => q.id !== id);
+  persistAndRender();
+}
+// 이름 없이 닫으면 만들다 만 것으로 보고 지웁니다.
+function closePlanEditor() {
+  const q = state.queue.find((x) => x.id === editingPlanId);
+  if (q && !q.task.trim()) state.queue = state.queue.filter((x) => x.id !== q.id);
+  editingPlanId = null;
   persistAndRender();
 }
 function editPlan(id) {
@@ -2057,7 +2060,6 @@ function doReset(scope) {
   editingTagId = null;
   editingPresetId = null;
   notifiedKey = null;
-  drafts.queueDraft = { task: "", workId: "", subtaskId: "", extraLinks: [] };
   drafts.pendingUpdate = { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraLinks: [] };
   settingsOpen = false;
   persistAndRender();
@@ -2279,19 +2281,6 @@ function updateSpendTimerDisplay() {
   costEl.textContent = spendStatusText(state.activeSpend);
 }
 
-function renderQueueItem(item, idx) {
-  const w = item.workId ? state.works.find((x) => x.id === item.workId) : null;
-  return `
-    <li class="wl-queue-item" data-drag-item="queue">
-      <span class="wl-drag-handle" data-drag-handle="queue">${ICONS.grip}</span>
-      <span class="wl-queue-index">${idx + 1}</span>
-      <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml([w.name, ...(item.extraLinks || []).map((l) => workName(l.workId))].join(" + "))}</span>` : ""}</span>
-      ${item.at
-        ? `<button class="wl-cost-toggle" data-action="unscheduleQueueItem" data-id="${item.id}">${formatTime(item.at)} 해제</button>`
-        : `<button class="wl-cost-toggle" data-action="scheduleQueueItem" data-id="${item.id}">시각 정하기</button>`}
-      <button class="wl-icon-btn" data-action="removeFromQueue" data-id="${item.id}">${ICONS.x}</button>
-    </li>`;
-}
 
 // 타임블록에 붙일 때는 아직 안 끝낸 하위 할일만 고릅니다. 이미 골라둔 것이
 // 그 사이 완료됐다면 그것만은 남겨요 — 목록에서 조용히 사라져 선택이 풀리는
@@ -2324,34 +2313,6 @@ function renderWorkLinkRow({ workId, subtaskId, workSelect, subSelect, index, re
     </div>`;
 }
 
-function renderQueueSection() {
-  const draft = drafts.queueDraft;
-  const activeWorks = state.works.filter((w) => !w.archived);
-  return `
-    <div class="wl-queue">
-      <div class="wl-card-title">블록 추가</div>
-      <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="다음 블록에서 할 일" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
-        <button class="wl-btn wl-btn--primary" data-action="addToQueue">${ICONS.plus} 추가</button>
-      </div>
-      ${activeWorks.length > 0 ? `
-        ${renderWorkLinkRow({
-          workId: draft.workId, subtaskId: draft.subtaskId,
-          workSelect: "queueWork", subSelect: "queueSub", placeholder: "할일 연결 안 함",
-        })}
-        ${draft.extraLinks.map((l, i) => renderWorkLinkRow({
-          workId: l.workId, subtaskId: l.subtaskId,
-          workSelect: "queueExtraWork", subSelect: "queueExtraSub", index: i,
-          removeAction: "removeQueueExtraLink", placeholder: "함께 할 할일 선택",
-        })).join("")}
-        ${draft.workId ? `<button class="wl-cost-toggle" data-action="addQueueExtraLink">${ICONS.plus} 할일 더 연결</button>` : ""}` : ""}
-      ${state.queue.length > 0 ? `
-        <div class="wl-hint" style="margin-top:10px">계획된 블록 ${state.queue.length}개 · 드래그로 순서 변경${timedQueue().length > 0 ? " · 시각을 정한 것이 앞에 섭니다" : ""}</div>
-        <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
-        ${!state.activeBlock && !state.queue[0].at ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} "${escapeHtml(state.queue[0].task)}" 시작</button>` : ""}
-      ` : `<div class="wl-hint" style="margin-top:10px">먼저 계획을 짜두고, 준비되면 "시작"을 눌러 순서대로 진행하세요.</div>`}
-    </div>`;
-}
 
 // ---- 오늘 보기: 시간축 위의 블록 ----
 // 시각은 전부 로컬 시계로 읽고 씁니다(getHours 등). 저장은 epoch ms라 다른
@@ -2532,13 +2493,21 @@ function renderTodayTimeline() {
     </section>`;
 }
 function pad2(n) { return String(n).padStart(2, "0"); }
-// 이름을 치는 동안 시간축 카드의 글자만 바꿔 끼웁니다.
+// 이름을 치는 동안에는 화면을 다시 그리지 않습니다(캐럿이 날아가서요).
+// 대신 시간축 카드의 글자와 확인 버튼만 제자리에서 바꿔 끼웁니다.
 function updatePlanLabel(q) {
   const el = document.querySelector(`[data-plan="${q.id}"] .wl-tl-label`);
-  if (!el) return;
-  const w = q.workId ? state.works.find((x) => x.id === q.workId) : null;
-  const sub = q.subtaskId && w ? (w.subtasks || []).find((x) => x.id === q.subtaskId) : null;
-  el.innerHTML = `${escapeHtml(q.task)}${w ? `<span class="wl-tl-sub"> · ${escapeHtml(sub ? sub.name : w.name)}</span>` : ""}`;
+  if (el) {
+    const w = q.workId ? state.works.find((x) => x.id === q.workId) : null;
+    const sub = q.subtaskId && w ? (w.subtasks || []).find((x) => x.id === q.subtaskId) : null;
+    el.innerHTML = `${escapeHtml(q.task)}${w ? `<span class="wl-tl-sub"> · ${escapeHtml(sub ? sub.name : w.name)}</span>` : ""}`;
+  }
+  const btn = document.querySelector(".wl-plan-panel .wl-btn--primary");
+  if (btn) {
+    const named = !!q.task.trim();
+    btn.disabled = !named;
+    btn.textContent = named ? "완료" : "할 일을 적어주세요";
+  }
 }
 
 // 블록 카드를 누르면 팝업으로 엽니다. 시간축 아래에 붙여놨더니 누른 카드와
@@ -2555,10 +2524,9 @@ function renderPlanEditor() {
     <div class="wl-settings-overlay wl-plan-overlay">
       <div class="wl-settings-panel wl-plan-panel">
         <div class="wl-settings-head">
-          <div class="wl-settings-title">블록 고치기</div>
+          <div class="wl-settings-desc" style="margin:0">${fmt(start)}–${fmt(end)} · 작업 ${WORK_MIN}분 + 휴식 ${BREAK_MIN}분</div>
           <button class="wl-icon-btn" data-action="closePlanEditor" aria-label="닫기" title="닫기">${ICONS.x}</button>
         </div>
-        <div class="wl-settings-desc">${fmt(start)}–${fmt(end)} · 작업 ${WORK_MIN}분 + 휴식 ${BREAK_MIN}분</div>
 
         <div class="wl-settings-field">
           <label class="wl-settings-label">할 일</label>
@@ -2590,11 +2558,17 @@ function renderPlanEditor() {
               workId: q.workId || "", subtaskId: q.subtaskId || "",
               workSelect: "planWork", subSelect: "planSub", placeholder: "할일 연결 안 함",
             })}
+            ${(q.extraLinks || []).map((l, i) => renderWorkLinkRow({
+              workId: l.workId, subtaskId: l.subtaskId,
+              workSelect: "planExtraWork", subSelect: "planExtraSub", index: i,
+              removeAction: "removePlanExtraLink", placeholder: "함께 할 할일 선택",
+            })).join("")}
+            ${q.workId ? `<button class="wl-cost-toggle" data-action="addPlanExtraLink">${ICONS.plus} 할일 더 연결</button>` : ""}
           </div>` : ""}
 
         <div class="wl-settings-actions">
           <button class="wl-btn wl-btn--quiet" data-action="removeFromQueue" data-id="${q.id}">${ICONS.trash} 삭제</button>
-          <button class="wl-btn wl-btn--primary" data-action="closePlanEditor">완료</button>
+          <button class="wl-btn wl-btn--primary" data-action="closePlanEditor" ${q.task.trim() ? "" : "disabled"}>${q.task.trim() ? "완료" : "할 일을 적어주세요"}</button>
         </div>
       </div>
     </div>`;
@@ -2615,25 +2589,9 @@ function nudgePlan(id, delta) {
 }
 
 function renderBlockAddForm() {
-  const draft = drafts.queueDraft;
-  const activeWorks = state.works.filter((w) => !w.archived);
   return `
     <div class="wl-plan-add">
-      <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="블록 추가 — 무엇을 할까요" data-draft="queueTask" data-enter-action="addToQueue" value="${escapeAttr(draft.task)}" />
-        <button class="wl-btn wl-btn--ghost" data-action="addToQueue">${ICONS.plus}</button>
-      </div>
-      ${draft.task && activeWorks.length > 0 ? `
-        ${renderWorkLinkRow({
-          workId: draft.workId, subtaskId: draft.subtaskId,
-          workSelect: "queueWork", subSelect: "queueSub", placeholder: "할일 연결 안 함",
-        })}
-        ${draft.extraLinks.map((l, i) => renderWorkLinkRow({
-          workId: l.workId, subtaskId: l.subtaskId,
-          workSelect: "queueExtraWork", subSelect: "queueExtraSub", index: i,
-          removeAction: "removeQueueExtraLink", placeholder: "함께 할 할일 선택",
-        })).join("")}
-        ${draft.workId ? `<button class="wl-cost-toggle" data-action="addQueueExtraLink">${ICONS.plus} 할일 더 연결</button>` : ""}` : ""}
+      <button class="wl-btn wl-btn--ghost wl-btn--full" data-action="addBlock">${ICONS.plus} 블록 추가</button>
     </div>`;
 }
 
@@ -4546,17 +4504,17 @@ function runAction(name, ds) {
         render();
       });
       break;
-    case "addToQueue": addToQueue(); break;
+    case "addBlock": addBlock(); break;
+    case "addPlanExtraLink": addPlanExtraLink(); break;
+    case "removePlanExtraLink": removePlanExtraLink(ds.index); break;
     case "removeFromQueue": removeFromQueue(ds.id); break;
     case "startQueue": startQueue(); break;
     case "editPlan": editPlan(ds.id); break;
     case "nudgePlan": nudgePlan(ds.id, ds.min); break;
-    case "closePlanEditor": editingPlanId = null; render(); break;
+    case "closePlanEditor": closePlanEditor(); break;
     case "toggleSwitchForm": toggleSwitchForm(); break;
     case "switchSessionWork": switchSessionWork(); break;
     case "switchToLinkedWork": switchSessionWork(ds.index); break;
-    case "addQueueExtraLink": addQueueExtraLink(); break;
-    case "removeQueueExtraLink": removeQueueExtraLink(ds.index); break;
     case "addUpdateExtraLink": addUpdateExtraLink(); break;
     case "removeUpdateExtraLink": removeUpdateExtraLink(ds.index); break;
     case "toggleGoalCategory": toggleGoalCategoryExpand(ds.cat); break;
@@ -4579,7 +4537,7 @@ function onRootClick(e) {
   // 설정 패널 바깥의 어두운 곳을 누르면 닫힙니다. target을 직접 확인하는 이유는
   // 패널 안 빈 곳을 눌렀을 때까지 닫히면 곤란해서예요.
   if (e.target.classList && e.target.classList.contains("wl-settings-overlay")) {
-    if (e.target.classList.contains("wl-plan-overlay")) { editingPlanId = null; render(); }
+    if (e.target.classList.contains("wl-plan-overlay")) { closePlanEditor(); }
     else closeSettings();
     return;
   }
@@ -4676,7 +4634,6 @@ function onRootInput(e) {
       drafts.newCost[workId] = { ...(drafts.newCost[workId] || {}), amount: clampNumeric() };
       break;
     }
-    case "queueTask": drafts.queueDraft.task = value; break;
     case "switchTask": drafts.switchDraft.task = value; break;
     case "settingsToken": drafts.settings.token = value; break;
     case "settingsOwner": drafts.settings.owner = value; break;
@@ -4716,8 +4673,6 @@ async function onRootChange(e) {
     const kind = select.dataset.select;
     if (kind === "manualWork") { drafts.manualBlock.workId = select.value; drafts.manualBlock.subtaskId = ""; render(); }
     if (kind === "manualSub") { drafts.manualBlock.subtaskId = select.value; render(); }
-    if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
-    if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
     if (kind === "manualSpendPreset") {
       const pre = state.spendPresets.find((x) => x.id === select.value);
       if (pre) { drafts.manualSpend.label = pre.label; drafts.manualSpend.cost = String(pre.cost); }
@@ -4743,8 +4698,16 @@ async function onRootChange(e) {
       const q = state.queue.find((x) => x.id === editingPlanId);
       if (q) { q.subtaskId = select.value || null; persistAndRender(); }
     }
-    if (kind === "queueExtraWork") { const l = drafts.queueDraft.extraLinks[Number(select.dataset.index)]; if (l) { l.workId = select.value; l.subtaskId = ""; render(); } }
-    if (kind === "queueExtraSub") { const l = drafts.queueDraft.extraLinks[Number(select.dataset.index)]; if (l) l.subtaskId = select.value; }
+    if (kind === "planExtraWork") {
+      const q = state.queue.find((x) => x.id === editingPlanId);
+      const l = q && q.extraLinks[Number(select.dataset.index)];
+      if (l) { l.workId = select.value; l.subtaskId = ""; persistAndRender(); }
+    }
+    if (kind === "planExtraSub") {
+      const q = state.queue.find((x) => x.id === editingPlanId);
+      const l = q && q.extraLinks[Number(select.dataset.index)];
+      if (l) { l.subtaskId = select.value; persistAndRender(); }
+    }
     if (kind === "updateExtraWork") { const l = drafts.pendingUpdate.extraLinks[Number(select.dataset.index)]; if (l) { l.workId = select.value; l.subtaskId = ""; render(); } }
     if (kind === "updateExtraSub") { const l = drafts.pendingUpdate.extraLinks[Number(select.dataset.index)]; if (l) l.subtaskId = select.value; }
     if (kind === "switchWork") { drafts.switchDraft.workId = select.value; drafts.switchDraft.subtaskId = ""; render(); }
@@ -4865,7 +4828,7 @@ function attachHandlers() {
   // root가 아니라 document에 답니다.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (editingPlanId) { editingPlanId = null; render(); return; }
+    if (editingPlanId) { closePlanEditor(); return; }
     if (settingsOpen) closeSettings();
   });
   // Closing the floating window from its own controls has to switch the
