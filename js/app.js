@@ -1268,6 +1268,43 @@ function removeFromQueue(id) {
   state.queue = state.queue.filter((q) => q.id !== id);
   persistAndRender();
 }
+// 타임라인에 올리기 — 지금 이후 가장 이른 빈 칸에 놓고, 미세 조정은 드래그로.
+function scheduleQueueItem(id) {
+  const item = state.queue.find((q) => q.id === id);
+  if (!item) return;
+  const min = nextFreeSlotMinute();
+  if (min == null) { window.alert("오늘 남은 자리가 없어요."); return; }
+  item.at = msAtMinute(min);
+  sortQueueByTime();
+  persistAndRender();
+}
+function unscheduleQueueItem(id) {
+  const item = state.queue.find((q) => q.id === id);
+  if (!item) return;
+  delete item.at;
+  sortQueueByTime();
+  persistAndRender();
+}
+// 드래그로 옮길 때 부르는 자리 옮기기. 지금 이후로만, 10분 단위로, 빈 칸에만.
+function moveQueueItemTo(id, rawMinute) {
+  const item = state.queue.find((q) => q.id === id);
+  if (!item) return false;
+  const floor = snapMinutes(minutesOfDay(Date.now()) + SNAP_MIN);
+  let min = Math.max(floor, Math.min(24 * 60 - SLOT_MIN, snapMinutes(rawMinute)));
+  if (!slotFree(min, id)) {
+    // 겹치면 아래위로 가장 가까운 빈 자리를 찾습니다.
+    let found = null;
+    for (let step = SNAP_MIN; step <= 12 * 60 && found == null; step += SNAP_MIN) {
+      if (min + step <= 24 * 60 - SLOT_MIN && slotFree(min + step, id)) found = min + step;
+      else if (min - step >= floor && slotFree(min - step, id)) found = min - step;
+    }
+    if (found == null) return false;
+    min = found;
+  }
+  item.at = msAtMinute(min);
+  sortQueueByTime();
+  return true;
+}
 function startQueue() {
   if (state.activeBlock || state.queue.length === 0) return;
   if (state.activeSpend) {
@@ -2185,6 +2222,9 @@ function renderQueueItem(item, idx) {
       <span class="wl-drag-handle" data-drag-handle="queue">${ICONS.grip}</span>
       <span class="wl-queue-index">${idx + 1}</span>
       <span class="wl-queue-task">${escapeHtml(item.task)}${w ? `<span class="wl-queue-work"> · ${escapeHtml([w.name, ...(item.extraLinks || []).map((l) => workName(l.workId))].join(" + "))}</span>` : ""}</span>
+      ${item.at
+        ? `<button class="wl-cost-toggle" data-action="unscheduleQueueItem" data-id="${item.id}">${formatTime(item.at)} 해제</button>`
+        : `<button class="wl-cost-toggle" data-action="scheduleQueueItem" data-id="${item.id}">시각 정하기</button>`}
       <button class="wl-icon-btn" data-action="removeFromQueue" data-id="${item.id}">${ICONS.x}</button>
     </li>`;
 }
@@ -2242,12 +2282,142 @@ function renderQueueSection() {
         })).join("")}
         ${draft.workId ? `<button class="wl-cost-toggle" data-action="addQueueExtraLink">${ICONS.plus} 할일 더 연결</button>` : ""}` : ""}
       ${state.queue.length > 0 ? `
-        <div class="wl-hint" style="margin-top:10px">계획된 블록 ${state.queue.length}개 · 드래그로 순서 변경</div>
+        <div class="wl-hint" style="margin-top:10px">계획된 블록 ${state.queue.length}개 · 드래그로 순서 변경${timedQueue().length > 0 ? " · 시각을 정한 것이 앞에 섭니다" : ""}</div>
         <ul class="wl-queue-list">${state.queue.map(renderQueueItem).join("")}</ul>
-        ${!state.activeBlock ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} "${escapeHtml(state.queue[0].task)}" 시작</button>` : ""}
+        ${!state.activeBlock && !state.queue[0].at ? `<button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue">${ICONS.play} "${escapeHtml(state.queue[0].task)}" 시작</button>` : ""}
       ` : `<div class="wl-hint" style="margin-top:10px">먼저 계획을 짜두고, 준비되면 "시작"을 눌러 순서대로 진행하세요.</div>`}
     </div>`;
 }
+
+// ---- 오늘 보기: 시간축 위의 블록 ----
+// 시각은 전부 로컬 시계로 읽고 씁니다(getHours 등). 저장은 epoch ms라 다른
+// 나라에서 열면 그곳 시계로 다시 그려집니다 — 옮겨 다녀도 맞게 보이라고요.
+const SLOT_MIN = WORK_MIN + BREAK_MIN;   // 예정 한 칸 = 작업 50분 + 휴식 10분
+const SNAP_MIN = 10;                     // 끌어 옮길 때 붙는 단위
+const HOUR_PX = 58;                      // 시간축 1시간의 높이
+const DAY_START_HOUR = 9;                // 기록이 없을 때 보여줄 기본 범위
+const DAY_END_HOUR = 19;
+
+function minutesOfDay(ms) {
+  const d = new Date(ms);
+  return d.getHours() * 60 + d.getMinutes();
+}
+function msAtMinute(min) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime() + min * 60000;
+}
+function snapMinutes(min) {
+  return Math.round(min / SNAP_MIN) * SNAP_MIN;
+}
+// 시각을 정해둔 블록은 시각 순으로 앞에, 안 정한 것은 그 뒤에 원래 순서대로.
+// 큐의 맨 앞이 곧 다음에 시작할 것이라, 시각을 정하는 게 순서를 정하는 겁니다.
+function sortQueueByTime() {
+  const timed = state.queue.filter((q) => q.at).sort((a, b) => a.at - b.at);
+  const untimed = state.queue.filter((q) => !q.at);
+  state.queue = [...timed, ...untimed];
+}
+function timedQueue() {
+  return state.queue.filter((q) => q.at);
+}
+// 예정끼리 겹치면 안 됩니다. 한 칸은 통째로 한 시간을 차지해요.
+function slotFree(startMin, ignoreId) {
+  return timedQueue().every((q) => {
+    if (q.id === ignoreId) return true;
+    const s = minutesOfDay(q.at);
+    return startMin + SLOT_MIN <= s || startMin >= s + SLOT_MIN;
+  });
+}
+// 지금 이후로 가장 이른 빈 칸. 10분 단위로 훑습니다.
+function nextFreeSlotMinute() {
+  const now = snapMinutes(minutesOfDay(Date.now()) + SNAP_MIN);
+  for (let m = now; m <= 24 * 60 - SLOT_MIN; m += SNAP_MIN) {
+    if (slotFree(m)) return m;
+  }
+  return null;
+}
+function todayEvents() {
+  const day = todayKey();
+  const blocks = (state.blocksByDate[day] || []).map((b) => ({
+    kind: "block", id: b.id, label: b.task,
+    from: minutesOfDay(b.startedAt), to: minutesOfDay(b.completedAt),
+    points: b.points,
+  }));
+  const active = state.activeBlock;
+  if (active) {
+    blocks.push({
+      kind: "active", id: active.id,
+      label: active.phase === "work" ? active.task : "휴식",
+      from: minutesOfDay(active.startedAt), to: minutesOfDay(Date.now()),
+    });
+  }
+  const planned = timedQueue().map((q) => ({
+    kind: "plan", id: q.id, label: q.task,
+    from: minutesOfDay(q.at), to: minutesOfDay(q.at) + SLOT_MIN,
+    past: q.at + SLOT_MIN * 60000 < Date.now(),
+  }));
+  // 자정을 넘겨 끝난 블록은 그날 끝까지만 그립니다.
+  return [...blocks, ...planned].map((e) => ({ ...e, to: e.to < e.from ? 24 * 60 : e.to }));
+}
+
+function renderTodayTimeline() {
+  const events = todayEvents();
+  const nowMin = minutesOfDay(Date.now());
+  // 기본 범위를 기록이 벗어나면 그만큼 넓힙니다.
+  let startH = DAY_START_HOUR;
+  let endH = DAY_END_HOUR;
+  events.forEach((e) => {
+    startH = Math.min(startH, Math.floor(e.from / 60));
+    endH = Math.max(endH, Math.ceil(e.to / 60));
+  });
+  startH = Math.min(startH, Math.floor(nowMin / 60));
+  endH = Math.max(endH, Math.ceil(nowMin / 60) + 1);
+  const top = startH * 60;
+  const height = (endH - startH) * HOUR_PX;
+  const y = (min) => ((min - top) / 60) * HOUR_PX;
+  const hours = [];
+  for (let h = startH; h <= endH; h += 1) hours.push(h);
+  const firstPlan = timedQueue()[0];
+  return `
+    <section class="wl-card">
+      <div class="wl-work-head">
+        <div class="wl-card-title" style="margin-bottom:0">오늘</div>
+        <span class="wl-hint">${formatTime(Date.now())}</span>
+      </div>
+      <div class="wl-timeline" data-top="${top}" style="height:${height}px">
+        ${hours.map((h) => `
+          <div class="wl-tl-hour" style="top:${y(h * 60)}px">
+            <span class="wl-tl-hour-label">${h}시</span>
+          </div>`).join("")}
+        ${events.map((e) => {
+          const h = Math.max(18, y(e.to) - y(e.from));
+          if (e.kind === "plan") {
+            const movable = e.id === (firstPlan || {}).id || !e.past;
+            return `
+            <div class="wl-tl-item wl-tl-plan ${e.past ? "is-past" : ""}" data-drag-item="plan" data-plan="${e.id}"
+                 style="top:${y(e.from)}px;height:${h}px">
+              ${movable && !e.past ? `<span class="wl-tl-grip" data-drag-handle="plan">${ICONS.grip}</span>` : ""}
+              <span class="wl-tl-label">${escapeHtml(e.label)}</span>
+              <span class="wl-tl-time">${pad2(Math.floor(e.from / 60))}:${pad2(e.from % 60)}</span>
+            </div>`;
+          }
+          return `
+          <div class="wl-tl-item wl-tl-${e.kind === "active" ? "active" : "done"}"
+               style="top:${y(e.from)}px;height:${h}px">
+            <span class="wl-tl-label">${escapeHtml(e.label)}</span>
+            <span class="wl-tl-time">${e.points != null ? `${e.points}점` : "진행 중"}</span>
+          </div>`;
+        }).join("")}
+        <div class="wl-tl-now" style="top:${y(nowMin)}px"><span class="wl-tl-now-dot"></span></div>
+      </div>
+      ${firstPlan && !state.activeBlock ? `
+        <button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue" style="margin-top:12px">
+          ${ICONS.play} ${pad2(Math.floor(minutesOfDay(firstPlan.at) / 60))}:${pad2(minutesOfDay(firstPlan.at) % 60)} "${escapeHtml(firstPlan.task)}" 시작
+        </button>` : ""}
+      <div class="wl-hint" style="margin-top:8px">현재 시각 선은 눈금일 뿐이에요. 시각이 와도 저절로 시작하지 않습니다.</div>
+    </section>`;
+}
+function pad2(n) { return String(n).padStart(2, "0"); }
 
 // 중단 직후 자리를 지키는 되돌리기. 확인창을 그냥 눌러버린 경우까지 구해줍니다.
 function renderCancelUndo() {
@@ -2310,6 +2480,7 @@ function renderTimeBlockColumn(focus = false) {
           })
         : renderCancelUndo() || `<div class="wl-empty wl-empty--pad">진행 중인 블록이 없어요. 아래에서 계획을 짜고 시작해보세요.</div>`}
     </section>
+    ${focus ? "" : renderTodayTimeline()}
     ${focus ? "" : `
       <section class="wl-card">
         ${renderQueueSection()}
@@ -4110,6 +4281,8 @@ function runAction(name, ds) {
     case "addToQueue": addToQueue(); break;
     case "removeFromQueue": removeFromQueue(ds.id); break;
     case "startQueue": startQueue(); break;
+    case "scheduleQueueItem": scheduleQueueItem(ds.id); break;
+    case "unscheduleQueueItem": unscheduleQueueItem(ds.id); break;
     case "toggleSwitchForm": toggleSwitchForm(); break;
     case "switchSessionWork": switchSessionWork(); break;
     case "switchToLinkedWork": switchSessionWork(ds.index); break;
@@ -4303,6 +4476,19 @@ function onPointerDown(e) {
   const item = handle.closest(`[data-drag-item="${kind}"]`);
   if (!item) return;
   e.preventDefault();
+  if (kind === "plan") {
+    // 목록 재정렬이 아니라 시간축 위에서 자리를 옮기는 드래그입니다.
+    const track = item.closest(".wl-timeline");
+    if (!track) return;
+    dragSource = {
+      kind, item, track,
+      grabOffset: e.clientY - item.getBoundingClientRect().top,
+      id: item.dataset.plan,
+    };
+    item.classList.add("is-dragging");
+    try { handle.setPointerCapture(e.pointerId); } catch (err) { /* best-effort */ }
+    return;
+  }
   const scope = kind === "subtask" ? item.dataset.work : null;
   const items = dragItemsFor(kind, scope);
   const from = items.indexOf(item);
@@ -4314,11 +4500,28 @@ function onPointerDown(e) {
 function onPointerMove(e) {
   if (!dragSource) return;
   e.preventDefault();
+  if (dragSource.kind === "plan") {
+    // 끄는 동안에는 칸만 따라 움직이고, 저장은 손을 뗄 때 한 번만 합니다.
+    const rect = dragSource.track.getBoundingClientRect();
+    const topPx = Math.max(0, e.clientY - rect.top - dragSource.grabOffset);
+    dragSource.item.style.top = `${topPx}px`;
+    dragSource.dropMinute = Number(dragSource.track.dataset.top) + (topPx / HOUR_PX) * 60;
+    return;
+  }
   dragSource.to = targetIndexAt(dragSource.items, e.clientY);
   markDropTarget();
 }
 function onPointerUp() {
   if (!dragSource) return;
+  if (dragSource.kind === "plan") {
+    const { id, dropMinute } = dragSource;
+    dragSource.item.classList.remove("is-dragging");
+    dragSource = null;
+    if (dropMinute == null) return;
+    if (moveQueueItemTo(id, dropMinute)) persistAndRender();
+    else render();   // 놓을 자리가 없으면 원래 자리로 돌려놓습니다
+    return;
+  }
   const { kind, item, items, from, to } = dragSource;
   item.classList.remove("is-dragging");
   items.forEach((el) => el.classList.remove("is-drop-target"));
@@ -4331,6 +4534,12 @@ function onPointerUp() {
 }
 function onPointerCancel() {
   if (!dragSource) return;
+  if (dragSource.kind === "plan") {
+    dragSource.item.classList.remove("is-dragging");
+    dragSource = null;
+    render();
+    return;
+  }
   dragSource.item.classList.remove("is-dragging");
   dragSource.items.forEach((el) => el.classList.remove("is-drop-target"));
   dragSource = null;
