@@ -687,3 +687,33 @@ body {
 /* 오늘 쉬는 습관은 고치는 중에만 보이고, 체크할 수 없다는 게 드러나야 합니다. */
 .wl-habit-row.is-offday .wl-habit-name { color: var(--wl-text-muted); }
 .wl-checkbox.is-offday { opacity: .3; }
+
+/* 오늘 보기 — 시간축 위의 블록. 한 시간이 58px이고, 예정 칸은 작업 50분 +
+   휴식 10분이라 정확히 한 칸을 차지합니다. */
+.wl-timeline { position: relative; margin-top: 10px; padding-left: 38px; }
+.wl-tl-hour { position: absolute; left: 0; right: 0; border-top: 1px solid var(--wl-border); }
+.wl-tl-hour-label {
+  position: absolute; left: 0; top: -7px; width: 32px; text-align: right;
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--wl-text-muted);
+}
+.wl-tl-item {
+  position: absolute; left: 38px; right: 0; overflow: hidden;
+  display: flex; align-items: center; gap: 6px;
+  border-radius: 3px; padding: 3px 7px; font-size: 11.5px;
+}
+.wl-tl-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-tl-time { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--wl-text-muted); flex-shrink: 0; }
+.wl-tl-done { background: var(--wl-surface-2); border-left: 2px solid var(--wl-work); }
+.wl-tl-active { background: rgba(143, 168, 118, 0.18); border-left: 2px solid var(--wl-work); }
+/* 예정은 아직 안 한 것이라 테두리만 — 한 것과 한눈에 구분돼야 합니다. */
+.wl-tl-plan { border: 1px dashed var(--wl-border); color: var(--wl-text-muted); }
+.wl-tl-plan.is-past { opacity: .45; }
+.wl-tl-plan.is-dragging { border-style: solid; border-color: var(--wl-work); color: var(--wl-text); z-index: 3; }
+.wl-tl-grip { color: var(--wl-text-muted); display: inline-flex; cursor: grab; touch-action: none; flex-shrink: 0; }
+.wl-tl-grip svg { width: 13px; height: 13px; }
+/* 현재 시각 선은 눈금일 뿐입니다. 아무것도 실행하지 않아요. */
+.wl-tl-now { position: absolute; left: 32px; right: 0; border-top: 1px solid var(--wl-spend); z-index: 2; pointer-events: none; }
+.wl-tl-now-dot {
+  position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--wl-spend);
+}
