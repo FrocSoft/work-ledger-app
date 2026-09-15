@@ -704,6 +704,11 @@ body {
 .wl-tl-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wl-tl-time { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--wl-text-muted); flex-shrink: 0; }
 .wl-tl-done { background: var(--wl-surface-2); border-left: 2px solid var(--wl-work); }
+/* 소비도 시간을 먹는 행위라 시간축에 길이로 섭니다. 작업과 색으로 갈라둬야
+   "오후가 왜 비었나"가 한눈에 읽혀요. */
+.wl-tl-spend { background: rgba(192, 104, 74, 0.12); border-left: 2px solid var(--wl-spend); }
+.wl-tl-spend .wl-tl-time { color: var(--wl-spend); }
+.wl-tl-spend.is-live { background: rgba(192, 104, 74, 0.22); }
 .wl-tl-active { background: rgba(143, 168, 118, 0.18); border-left: 2px solid var(--wl-work); }
 /* 예정은 아직 안 한 것이라 테두리만 — 한 것과 한눈에 구분돼야 합니다. */
 .wl-tl-plan { border: 1px dashed var(--wl-border); color: var(--wl-text-muted); }

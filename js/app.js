@@ -370,6 +370,7 @@ let habitEditOpen = false;
 let exportMsg = "";  // 보고 있는 기간 안의 아무 날짜 (null = 오늘)
 let switchFormOpen = false;
 let manualBlockOpen = false;
+let manualSpendOpen = false;
 let floatingTimerOn = false;
 let floatingTimerNote = "";
 let timerWindow = null;
@@ -395,6 +396,7 @@ const drafts = {
   queueDraft: { task: "", workId: "", subtaskId: "", extraLinks: [] },
   switchDraft: { task: "", workId: "", subtaskId: "" },
   manualBlock: { task: "", workId: "", subtaskId: "", date: "", time: "", minutes: "" },
+  manualSpend: { label: "", cost: "", date: "", time: "", minutes: "" },
   saleAmount: {},
   newHabit: "",
   payoutRate: null,
@@ -1338,6 +1340,31 @@ function spendStatusText(activeSpend) {
   }
   return `지금까지 -${cost}점 · 1시간 초과 ${formatMinutes(Math.floor(minutes - SPEND_INCLUDED_MIN))} · 10분마다 1점씩 더 차감돼요`;
 }
+// 소비 기록은 원래 "언제 끝났나" 한 점만 남겼습니다. 20분을 했든 세 시간을
+// 했든 같은 줄이라, 시간축에 그릴 수도 없고 나중에 되짚을 수도 없었어요.
+// 이제 시작 시각과 길이를 함께 남깁니다. 옛 기록은 당시 기본 규칙대로
+// 1시간짜리로 읽습니다 — 실제로 얼마였는지는 알 길이 없으니까요.
+function spendRange(e) {
+  const minutes = e.minutes != null ? e.minutes : SPEND_INCLUDED_MIN;
+  const startedAt = e.startedAt != null ? e.startedAt : e.at - minutes * 60000;
+  return { startedAt, minutes, endedAt: startedAt + minutes * 60000 };
+}
+// 켜둔 시간에 매기는 값. 기본 점수가 1시간을 덮고, 넘으면 10분마다 1점씩.
+function spendCostFor(base, minutes) {
+  return base + Math.max(0, Math.floor((minutes - SPEND_INCLUDED_MIN) / SPEND_MIN_PER_POINT));
+}
+// 오늘 몫으로 깎고, 모자라면 저축에서 빌립니다. 나중에 끝낸 블록이 이 빚을
+// 먼저 갚기 때문에 벌기 전에 썼는지 후에 썼는지가 결과를 바꾸지 않아요.
+function chargeToday(delta) {
+  if (delta <= 0) return;
+  const { dailyPool, dailySpent } = computeToday();
+  const overflow = Math.max(0, delta - Math.max(0, dailyPool - dailySpent));
+  if (overflow > 0) {
+    const day = todayKey();
+    state.savings -= overflow;
+    state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) + overflow;
+  }
+}
 function startSpendTimer(label, cost) {
   if (state.activeSpend) return;
   // 작업과 소비가 같이 돌아가는 상태는 애초에 있으면 안 됩니다. 시간은 하나뿐이고
@@ -1360,29 +1387,24 @@ function applyActiveSpendTick() {
   const total = spendElapsedPoints(active);
   const delta = total - (active.appliedPoints || 0);
   if (delta <= 0) return false;
-  const { dailyPool, dailySpent } = computeToday();
-  const availableBefore = dailyPool - dailySpent;
-  const overflow = Math.max(0, delta - Math.max(0, availableBefore));
+  chargeToday(delta);
   const day = todayKey();
-  if (overflow > 0) {
-    // Borrowed from savings because today's pool didn't cover it. Blocks
-    // finished later today pay this back first (see completeActiveBlock),
-    // so the day's result doesn't depend on whether you spent before or
-    // after earning.
-    state.savings -= overflow;
-    state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) + overflow;
-  }
   const list = state.spendsByDate[day] || [];
   // The running log entry lives on the day the timer started; once the clock
   // rolls past midnight that entry is on yesterday's list, so start a fresh
   // one for today instead of silently dropping the charge.
   const existing = active.logId ? list.find((e) => e.id === active.logId) : null;
+  const minutes = Math.max(1, Math.round(spendMinutes(active)));
   if (existing) {
-    state.spendsByDate[day] = list.map((e) => (e.id === active.logId ? { ...e, cost: e.cost + delta } : e));
+    state.spendsByDate[day] = list.map((e) => (e.id === active.logId
+      ? { ...e, cost: e.cost + delta, at: Date.now(), minutes } : e));
   } else {
     const id = uid();
     active.logId = id;
-    state.spendsByDate[day] = [...list, { id, label: active.label, cost: delta, at: Date.now() }];
+    state.spendsByDate[day] = [...list, {
+      id, label: active.label, cost: delta,
+      startedAt: active.startedAt, minutes, at: Date.now(),
+    }];
   }
   active.appliedPoints = total;
   return true;
@@ -1391,9 +1413,51 @@ function stopSpendTimer() {
   const active = state.activeSpend;
   if (!active) return;
   applyActiveSpendTick();
+  // 틱은 점수가 더 붙을 때만 기록을 건드립니다. 마지막 몇 분은 점수가 안
+  // 올라가도 시간은 흘렀으니, 끝낼 때 길이를 한 번 더 맞춰줍니다.
+  const day = todayKey();
+  const list = state.spendsByDate[day] || [];
+  if (active.logId) {
+    const minutes = Math.max(1, Math.round(spendMinutes(active)));
+    state.spendsByDate[day] = list.map((e) => (e.id === active.logId
+      ? { ...e, minutes, at: Date.now() } : e));
+  }
   const totalCost = active.appliedPoints || 0;
   state.activeSpend = null;
   sendNotification("소비 종료", `"${active.label}" 소비를 종료했어요. 총 -${totalCost}점 사용했어요.`);
+  persistAndRender();
+}
+// 놀 때는 앱을 안 켭니다. 그래서 그 순간에만 기록되는 구조로는 계속 새어나가요.
+// 지난 소비를 나중에 적는 자리 — 작업 블록의 "직접 입력"과 짝입니다.
+function manualSpendPreview() {
+  const d = drafts.manualSpend;
+  const label = d.label.trim();
+  const minutes = Number(d.minutes);
+  if (!label || !(minutes > 0)) return null;
+  const day = d.date || todayKey();
+  const [hh, mm] = (d.time || "").split(":").map(Number);
+  if (!(hh >= 0 && hh <= 23) || !(mm >= 0 && mm <= 59)) return null;
+  const [y, mo, dd] = day.split("-").map(Number);
+  const startedAt = new Date(y, mo - 1, dd, hh, mm, 0, 0).getTime();
+  const base = Number(d.cost) || 0;
+  return { day, label, startedAt, minutes, cost: spendCostFor(base, minutes) };
+}
+function addManualSpend() {
+  const p = manualSpendPreview();
+  if (!p) return;
+  const entry = {
+    id: uid(), label: p.label, cost: p.cost,
+    startedAt: p.startedAt, minutes: p.minutes,
+    at: p.startedAt + p.minutes * 60000, manual: true,
+  };
+  state.spendsByDate[p.day] = [...(state.spendsByDate[p.day] || []), entry]
+    .sort((a, b) => spendRange(a).startedAt - spendRange(b).startedAt);
+  // 오늘 것은 오늘 몫에서, 이미 정산이 끝난 날 것은 저축에서 바로 뺍니다.
+  // 아직 정산 안 된 지난 날은 그날 정산 때 이 기록이 같이 계산됩니다.
+  if (p.day === todayKey()) chargeToday(p.cost);
+  else if (state.processedDates.includes(p.day)) state.savings -= p.cost;
+  manualSpendOpen = false;
+  drafts.manualSpend = { label: "", cost: "", date: "", time: "", minutes: "" };
   persistAndRender();
 }
 function useOffDay() {
@@ -2351,13 +2415,48 @@ function todayEvents() {
       from: minutesOfDay(active.startedAt), to: minutesOfDay(Date.now()),
     });
   }
+  // 돌아가는 중인 소비는 아래에서 따로 그립니다. 로그에 이미 들어간 같은
+  // 항목까지 그리면 한 자리에 두 개가 서요.
+  const liveLogId = state.activeSpend ? state.activeSpend.logId : null;
+  const spends = (state.spendsByDate[day] || []).filter((e) => e.id !== liveLogId).map((e) => {
+    const r = spendRange(e);
+    return {
+      kind: "spend", id: e.id, label: e.label,
+      from: minutesOfDay(r.startedAt), to: minutesOfDay(r.endedAt), cost: e.cost,
+    };
+  });
+  if (state.activeSpend) {
+    spends.push({
+      kind: "spend", id: "active-spend", label: state.activeSpend.label,
+      from: minutesOfDay(state.activeSpend.startedAt), to: minutesOfDay(Date.now()),
+      cost: spendElapsedPoints(state.activeSpend), live: true,
+    });
+  }
   const planned = timedQueue().map((q) => ({
     kind: "plan", id: q.id, label: q.task,
     from: minutesOfDay(q.at), to: minutesOfDay(q.at) + SLOT_MIN,
     past: q.at + SLOT_MIN * 60000 < Date.now(),
   }));
   // 자정을 넘겨 끝난 블록은 그날 끝까지만 그립니다.
-  return [...blocks, ...planned].map((e) => ({ ...e, to: e.to < e.from ? 24 * 60 : e.to }));
+  const all = [...blocks, ...spends, ...planned]
+    .map((e) => ({ ...e, to: e.to < e.from ? 24 * 60 : e.to }))
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+  // 겹치는 것끼리 열을 나눠 나란히 세웁니다. 포개두면 아래 것이 안 보여요.
+  const placed = [];
+  all.forEach((e) => {
+    const clash = placed.filter((p) => e.from < p.to && p.from < e.to);
+    const taken = new Set(clash.map((p) => p.col));
+    let col = 0;
+    while (taken.has(col)) col += 1;
+    e.col = col;
+    placed.push(e);
+  });
+  // 한 덩이로 겹친 무리끼리 같은 열 수를 써야 폭이 들쭉날쭉하지 않습니다.
+  all.forEach((e) => {
+    const group = all.filter((o) => e.from < o.to && o.from < e.to);
+    e.cols = Math.max(...group.map((o) => o.col)) + 1;
+  });
+  return all;
 }
 
 function renderTodayTimeline() {
@@ -2391,13 +2490,16 @@ function renderTodayTimeline() {
           </div>`).join("")}
         ${events.map((e) => {
           const h = Math.max(18, y(e.to) - y(e.from));
+          const cols = e.cols || 1;
+          const w = 100 / cols;
+          const lane = cols > 1 ? `left:calc(38px + ${e.col * w}%);width:calc(${w}% - ${e.col === cols - 1 ? 0 : 2}px);` : "";
           if (e.kind === "plan") {
             const q = state.queue.find((x) => x.id === e.id) || {};
             const w = q.workId ? state.works.find((x) => x.id === q.workId) : null;
             const sub = q.subtaskId && w ? (w.subtasks || []).find((x) => x.id === q.subtaskId) : null;
             return `
             <div class="wl-tl-item wl-tl-plan ${e.past ? "is-past" : ""} ${editingPlanId === e.id ? "is-editing" : ""}"
-                 data-drag-item="plan" data-plan="${e.id}" style="top:${y(e.from)}px;height:${h}px">
+                 data-drag-item="plan" data-plan="${e.id}" style="${lane}top:${y(e.from)}px;height:${h}px">
               ${e.past ? "" : `<span class="wl-tl-grip" data-drag-handle="plan" title="끌어서 시각 옮기기">${ICONS.grip}</span>`}
               <button class="wl-tl-open" data-action="editPlan" data-id="${e.id}">
                 <span class="wl-tl-label">${escapeHtml(e.label)}${w ? `<span class="wl-tl-sub"> · ${escapeHtml(sub ? sub.name : w.name)}</span>` : ""}</span>
@@ -2405,9 +2507,16 @@ function renderTodayTimeline() {
               </button>
             </div>`;
           }
+          if (e.kind === "spend") {
+            return `
+            <div class="wl-tl-item wl-tl-spend ${e.live ? "is-live" : ""}" style="${lane}top:${y(e.from)}px;height:${h}px">
+              <span class="wl-tl-label">${escapeHtml(e.label)}</span>
+              <span class="wl-tl-time">${e.cost > 0 ? `-${e.cost}점` : "기록만"}</span>
+            </div>`;
+          }
           return `
           <div class="wl-tl-item wl-tl-${e.kind === "active" ? "active" : "done"}"
-               style="top:${y(e.from)}px;height:${h}px">
+               style="${lane}top:${y(e.from)}px;height:${h}px">
             <span class="wl-tl-label">${escapeHtml(e.label)}</span>
             <span class="wl-tl-time">${e.points != null ? `${e.points}점` : "진행 중"}</span>
           </div>`;
@@ -2793,8 +2902,12 @@ function renderTodaySummaryColumn() {
     <section class="wl-card">
       <div class="wl-work-head">
         <div class="wl-card-title" style="margin-bottom:0">소비</div>
-        <button class="wl-icon-btn" data-action="toggleSpendPresetsEdit">${spendPresetsEditOpen ? ICONS.check : ICONS.pencil}</button>
+        <div class="wl-field-btns">
+          <button class="wl-icon-btn ${manualSpendOpen ? "is-active" : ""}" data-action="toggleManualSpendForm" title="지난 소비 기록">${manualSpendOpen ? ICONS.x : ICONS.plus}</button>
+          <button class="wl-icon-btn" data-action="toggleSpendPresetsEdit">${spendPresetsEditOpen ? ICONS.check : ICONS.pencil}</button>
+        </div>
       </div>
+      ${manualSpendOpen ? renderManualSpendForm() : ""}
       ${spendPresetsEditOpen ? renderSpendPresetsEditor() : (state.activeSpend ? renderActiveSpendTimer() : renderSpendPresetButtons())}
     </section>
     <section class="wl-card">
@@ -2809,10 +2922,51 @@ function renderTodaySummaryColumn() {
           <li class="wl-log-row wl-log-row--spend">
             <span class="wl-log-time">${formatTime(item.at)}</span>
             <div class="wl-log-main"><div class="wl-log-label">${escapeHtml(item.label)}</div></div>
-            <span class="wl-log-points">-${item.cost}</span>
+            <span class="wl-log-points">${item.cost > 0 ? `-${item.cost}` : "0"}</span>
           </li>`).join("")}
       </ul>
     </section>`;
+}
+
+// 켠 적 없는 소비를 나중에 적는 폼. 프리셋을 고르면 이름과 기본 점수가
+// 채워지고, 길이에 따라 얼마가 깎일지 미리 보여줍니다.
+function renderManualSpendForm() {
+  const d = drafts.manualSpend;
+  const p = manualSpendPreview();
+  return `
+    <div class="wl-manual">
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <select class="wl-select" data-select="manualSpendPreset">
+          <option value="">직접 적기</option>
+          ${state.spendPresets.map((x) => `<option value="${x.id}" ${d.label === x.label && String(d.cost) === String(x.cost) ? "selected" : ""}>${escapeHtml(x.label)} (${x.cost}점)</option>`).join("")}
+        </select>
+        <input class="wl-input wl-input--sm" placeholder="무엇을 했나요" data-draft="manualSpendLabel" value="${escapeAttr(d.label)}" />
+        <input class="wl-input wl-input--num" placeholder="기본점" inputmode="numeric" data-draft="manualSpendCost" value="${escapeAttr(d.cost)}" />
+      </div>
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" type="date" data-draft="manualSpendDate" value="${escapeAttr(d.date || todayKey())}" />
+        <input class="wl-input wl-input--sm" type="time" data-draft="manualSpendTime" value="${escapeAttr(d.time)}" />
+        <input class="wl-input wl-input--num" placeholder="분" inputmode="numeric" data-draft="manualSpendMinutes" data-enter-action="addManualSpend" value="${escapeAttr(d.minutes)}" />
+      </div>
+      <div class="wl-hint" id="wl-manual-spend-preview">${manualSpendPreviewText()}</div>
+      <div class="wl-field-row wl-field-row--tight">
+        <button class="wl-btn wl-btn--primary wl-btn--full" id="wl-manual-spend-add" data-action="addManualSpend" ${p ? "" : "disabled"}>기록 추가</button>
+      </div>
+    </div>`;
+}
+function manualSpendPreviewText() {
+  const p = manualSpendPreview();
+  if (!p) return "시작 시각과 소요시간을 넣으면 차감될 점수가 미리 보여요.";
+  const end = new Date(p.startedAt + p.minutes * 60000);
+  return `${formatTime(p.startedAt)}–${formatTime(end)} · ${p.minutes}분 → <b>${p.cost > 0 ? `-${p.cost}점` : "기록만"}</b>`
+    + (p.minutes > SPEND_INCLUDED_MIN ? ` (1시간 초과 ${p.minutes - SPEND_INCLUDED_MIN}분)` : "");
+}
+// 타이핑 중에 render()를 부르면 캐럿이 날아갑니다. 미리보기 줄만 바꿉니다.
+function updateManualSpendPreview() {
+  const el = document.getElementById("wl-manual-spend-preview");
+  if (el) el.innerHTML = manualSpendPreviewText();
+  const btn = document.getElementById("wl-manual-spend-add");
+  if (btn) btn.disabled = !manualSpendPreview();
 }
 
 function manualPreviewText() {
@@ -4235,6 +4389,14 @@ function runAction(name, ds) {
     case "toggleGoalPick": toggleGoalPick(ds.scale, ds.pick); break;
     case "carryOverGoals": carryOverGoals(ds.scale); break;
     case "shiftLog": shiftLog(Number(ds.dir)); break;
+    case "toggleManualSpendForm":
+      manualSpendOpen = !manualSpendOpen;
+      if (manualSpendOpen && !drafts.manualSpend.time) {
+        drafts.manualSpend.time = formatTime(Date.now() - SPEND_INCLUDED_MIN * 60000);
+      }
+      render();
+      break;
+    case "addManualSpend": addManualSpend(); break;
     case "toggleManualBlockForm": toggleManualBlockForm(); break;
     case "addManualBlock": addManualBlock(); break;
     case "removeBlock": removeBlock(ds.block); break;
@@ -4399,6 +4561,11 @@ function onRootInput(e) {
     case "newWorkName": drafts.newWorkName = value; break;
     case "newWorkExpected": drafts.newWorkExpected = clampNumeric(); break;
     case "newWorkDue": drafts.newWorkDue = value; break;
+    case "manualSpendLabel": drafts.manualSpend.label = value; updateManualSpendPreview(); break;
+    case "manualSpendCost": drafts.manualSpend.cost = clampNumeric(); updateManualSpendPreview(); break;
+    case "manualSpendDate": drafts.manualSpend.date = value; updateManualSpendPreview(); break;
+    case "manualSpendTime": drafts.manualSpend.time = value; updateManualSpendPreview(); break;
+    case "manualSpendMinutes": drafts.manualSpend.minutes = clampNumeric(); updateManualSpendPreview(); break;
     case "planTask": {
       // 여기서 render()를 부르면 글자마다 화면이 새로 그려져 캐럿이 날아갑니다.
       const q = state.queue.find((x) => x.id === editingPlanId);
@@ -4501,6 +4668,11 @@ async function onRootChange(e) {
     if (kind === "manualSub") { drafts.manualBlock.subtaskId = select.value; render(); }
     if (kind === "queueWork") { drafts.queueDraft.workId = select.value; drafts.queueDraft.subtaskId = ""; render(); }
     if (kind === "queueSub") { drafts.queueDraft.subtaskId = select.value; }
+    if (kind === "manualSpendPreset") {
+      const pre = state.spendPresets.find((x) => x.id === select.value);
+      if (pre) { drafts.manualSpend.label = pre.label; drafts.manualSpend.cost = String(pre.cost); }
+      render();
+    }
     if (kind === "planWork") {
       const q = state.queue.find((x) => x.id === editingPlanId);
       if (q) { q.workId = select.value || null; q.subtaskId = null; persistAndRender(); }
