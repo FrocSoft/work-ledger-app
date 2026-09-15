@@ -732,8 +732,15 @@ body {
 }
 .wl-tl-sub { color: var(--wl-text-muted); }
 .wl-tl-plan.is-editing { border-style: solid; border-color: var(--wl-work); color: var(--wl-text); }
-.wl-plan-editor {
-  margin-top: 12px; padding: 12px; border: 1px solid var(--wl-work); border-radius: 3px;
-  background: var(--wl-surface-2);
-}
+/* 블록 고치기 팝업. 설정창과 같은 껍데기를 쓰되 좁게 — 칸이 몇 개 안 됩니다. */
+.wl-plan-panel { max-width: 380px; }
+.wl-plan-panel .wl-settings-desc { font-family: 'IBM Plex Mono', monospace; }
+.wl-plan-panel .wl-field-row--tight { margin-top: 0; }
+/* 시·분 고르는 칸과 ±10분 버튼 넷을 한 줄에 우겨넣으면 320px에서 "17시"가
+   잘립니다. 고르는 칸을 위, 버튼을 아래로 나눠 각자 넉넉히 씁니다. */
+.wl-plan-time { display: flex; flex-direction: column; gap: 8px; }
+.wl-plan-time-pick { display: flex; gap: 8px; }
+.wl-plan-time-pick .wl-select { flex: 1; min-width: 0; font-size: 14px; padding: 12px 8px; }
+.wl-plan-time-nudge { display: flex; gap: 8px; }
+.wl-plan-time-nudge .wl-btn { flex: 1; padding: 10px 8px; font-size: 13px; }
 .wl-plan-add { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wl-border); }
