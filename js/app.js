@@ -2527,7 +2527,6 @@ function renderTodayTimeline() {
         <button class="wl-btn wl-btn--primary wl-btn--full" data-action="startQueue" style="margin-top:12px">
           ${ICONS.play} ${pad2(Math.floor(minutesOfDay(firstPlan.at) / 60))}:${pad2(minutesOfDay(firstPlan.at) % 60)} "${escapeHtml(firstPlan.task)}" 시작
         </button>` : ""}
-      ${renderPlanEditor()}
       ${renderBlockAddForm()}
       <div class="wl-hint" style="margin-top:8px">끌어서 시각을 옮기고, 눌러서 고칩니다. 현재 시각 선은 눈금일 뿐이라 시각이 와도 저절로 시작하지 않아요.</div>
     </section>`;
@@ -2542,29 +2541,77 @@ function updatePlanLabel(q) {
   el.innerHTML = `${escapeHtml(q.task)}${w ? `<span class="wl-tl-sub"> · ${escapeHtml(sub ? sub.name : w.name)}</span>` : ""}`;
 }
 
-// 블록 카드를 누르면 그 자리에서 고칩니다. 할 일 이름과 연결을 여기서 다 바꿔요.
+// 블록 카드를 누르면 팝업으로 엽니다. 시간축 아래에 붙여놨더니 누른 카드와
+// 편집창이 멀찍이 떨어져서 뭘 고치는 중인지 안 보였어요. 시각도 여기서
+// 고릅니다 — 끌기 말고도 방법이 있어야 하니까요.
 function renderPlanEditor() {
-  if (!editingPlanId) return "";
   const q = state.queue.find((x) => x.id === editingPlanId);
   if (!q) return "";
   const activeWorks = state.works.filter((w) => !w.archived);
+  const start = minutesOfDay(q.at);
+  const end = start + SLOT_MIN;
+  const fmt = (m) => `${pad2(Math.floor((m % 1440) / 60))}:${pad2(m % 60)}`;
   return `
-    <div class="wl-plan-editor">
-      <div class="wl-work-head">
-        <div class="wl-card-title" style="margin-bottom:0">${formatTime(q.at)} 블록</div>
-        <button class="wl-icon-btn" data-action="closePlanEditor">${ICONS.x}</button>
-      </div>
-      <div class="wl-field-row wl-field-row--tight">
-        <input class="wl-input wl-input--sm" placeholder="이 블록에서 할 일" data-draft="planTask" value="${escapeAttr(q.task)}" data-enter-action="closePlanEditor" />
-      </div>
-      ${activeWorks.length > 0 ? renderWorkLinkRow({
-        workId: q.workId || "", subtaskId: q.subtaskId || "",
-        workSelect: "planWork", subSelect: "planSub", placeholder: "할일 연결 안 함",
-      }) : ""}
-      <div class="wl-field-row wl-field-row--tight">
-        <button class="wl-btn wl-btn--quiet" data-action="removeFromQueue" data-id="${q.id}">${ICONS.trash} 블록 삭제</button>
+    <div class="wl-settings-overlay wl-plan-overlay">
+      <div class="wl-settings-panel wl-plan-panel">
+        <div class="wl-settings-head">
+          <div class="wl-settings-title">블록 고치기</div>
+          <button class="wl-icon-btn" data-action="closePlanEditor" aria-label="닫기" title="닫기">${ICONS.x}</button>
+        </div>
+        <div class="wl-settings-desc">${fmt(start)}–${fmt(end)} · 작업 ${WORK_MIN}분 + 휴식 ${BREAK_MIN}분</div>
+
+        <div class="wl-settings-field">
+          <label class="wl-settings-label">할 일</label>
+          <input class="wl-input" placeholder="이 블록에서 할 일" data-draft="planTask" value="${escapeAttr(q.task)}" data-enter-action="closePlanEditor" />
+        </div>
+
+        <div class="wl-settings-field">
+          <label class="wl-settings-label">시작 시각 · 10분 단위, 지금 이후로만</label>
+          <div class="wl-plan-time">
+            <div class="wl-plan-time-pick">
+              <select class="wl-select" data-select="planHour">
+                ${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === Math.floor(start / 60) ? "selected" : ""}>${pad2(h)}시</option>`).join("")}
+              </select>
+              <select class="wl-select" data-select="planMinute">
+                ${Array.from({ length: 6 }, (_, i) => i * SNAP_MIN).map((m) => `<option value="${m}" ${m === start % 60 ? "selected" : ""}>${pad2(m)}분</option>`).join("")}
+              </select>
+            </div>
+            <div class="wl-plan-time-nudge">
+              <button class="wl-btn wl-btn--ghost" data-action="nudgePlan" data-id="${q.id}" data-min="-10" ${canNudgePlan(q, -10) ? "" : "disabled"}>−10분</button>
+              <button class="wl-btn wl-btn--ghost" data-action="nudgePlan" data-id="${q.id}" data-min="10" ${canNudgePlan(q, 10) ? "" : "disabled"}>+10분</button>
+            </div>
+          </div>
+        </div>
+
+        ${activeWorks.length > 0 ? `
+          <div class="wl-settings-field">
+            <label class="wl-settings-label">할일 연결</label>
+            ${renderWorkLinkRow({
+              workId: q.workId || "", subtaskId: q.subtaskId || "",
+              workSelect: "planWork", subSelect: "planSub", placeholder: "할일 연결 안 함",
+            })}
+          </div>` : ""}
+
+        <div class="wl-settings-actions">
+          <button class="wl-btn wl-btn--quiet" data-action="removeFromQueue" data-id="${q.id}">${ICONS.trash} 삭제</button>
+          <button class="wl-btn wl-btn--primary" data-action="closePlanEditor">완료</button>
+        </div>
       </div>
     </div>`;
+}
+// 바로 옆 칸이 비었는지. 앞뒤가 막혀 있으면 눌러도 안 움직이니, 버튼을
+// 흐리게 해서 왜 안 되는지 보이게 합니다.
+function canNudgePlan(q, delta) {
+  const target = minutesOfDay(q.at) + delta;
+  const floor = snapMinutes(minutesOfDay(Date.now()) + SNAP_MIN);
+  if (target < floor || target > 24 * 60 - SLOT_MIN) return false;
+  return slotFree(target, q.id);
+}
+// 버튼으로 10분씩.
+function nudgePlan(id, delta) {
+  const q = state.queue.find((x) => x.id === id);
+  if (!q) return;
+  if (moveQueueItemTo(id, minutesOfDay(q.at) + Number(delta))) persistAndRender();
 }
 
 function renderBlockAddForm() {
@@ -4359,6 +4406,7 @@ function render() {
   root.innerHTML = html;
   renderedDay = todayKey();
   if (state) syncTimerWindow();
+  if (editingPlanId) root.insertAdjacentHTML("beforeend", renderPlanEditor());
   if (settingsOpen) root.insertAdjacentHTML("beforeend", renderSettingsOverlay());
   if (lightboxImage) root.insertAdjacentHTML("beforeend", renderImageLightbox());
   if (prevScrollLeft) {
@@ -4502,6 +4550,7 @@ function runAction(name, ds) {
     case "removeFromQueue": removeFromQueue(ds.id); break;
     case "startQueue": startQueue(); break;
     case "editPlan": editPlan(ds.id); break;
+    case "nudgePlan": nudgePlan(ds.id, ds.min); break;
     case "closePlanEditor": editingPlanId = null; render(); break;
     case "toggleSwitchForm": toggleSwitchForm(); break;
     case "switchSessionWork": switchSessionWork(); break;
@@ -4530,7 +4579,8 @@ function onRootClick(e) {
   // 설정 패널 바깥의 어두운 곳을 누르면 닫힙니다. target을 직접 확인하는 이유는
   // 패널 안 빈 곳을 눌렀을 때까지 닫히면 곤란해서예요.
   if (e.target.classList && e.target.classList.contains("wl-settings-overlay")) {
-    closeSettings();
+    if (e.target.classList.contains("wl-plan-overlay")) { editingPlanId = null; render(); }
+    else closeSettings();
     return;
   }
   const el = e.target.closest("[data-action]");
@@ -4673,6 +4723,18 @@ async function onRootChange(e) {
       if (pre) { drafts.manualSpend.label = pre.label; drafts.manualSpend.cost = String(pre.cost); }
       render();
     }
+    // 시각은 <input type="time">을 쓰면 브라우저 로케일 때문에 12시간제로 나와
+    // "05:00"처럼 보이고 좁은 화면에서는 PM이 잘립니다. 시·분을 직접 고르게 해요.
+    if (kind === "planHour" || kind === "planMinute") {
+      const q = state.queue.find((x) => x.id === editingPlanId);
+      if (q) {
+        const cur = minutesOfDay(q.at);
+        const hh = kind === "planHour" ? Number(select.value) : Math.floor(cur / 60);
+        const mm = kind === "planMinute" ? Number(select.value) : cur % 60;
+        if (moveQueueItemTo(q.id, hh * 60 + mm)) persistAndRender();
+        else render();   // 놓을 자리가 없으면 원래 값으로 되돌립니다
+      }
+    }
     if (kind === "planWork") {
       const q = state.queue.find((x) => x.id === editingPlanId);
       if (q) { q.workId = select.value || null; q.subtaskId = null; persistAndRender(); }
@@ -4802,7 +4864,9 @@ function attachHandlers() {
   // Esc로도 설정 패널을 닫습니다. 입력칸에 포커스가 있어도 동작해야 해서
   // root가 아니라 document에 답니다.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && settingsOpen) closeSettings();
+    if (e.key !== "Escape") return;
+    if (editingPlanId) { editingPlanId = null; render(); return; }
+    if (settingsOpen) closeSettings();
   });
   // Closing the floating window from its own controls has to switch the
   // header button back off.
