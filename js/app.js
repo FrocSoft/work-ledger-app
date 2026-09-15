@@ -1358,8 +1358,10 @@ function spendCostFor(base, minutes) {
 }
 // 오늘 몫으로 깎고, 모자라면 저축에서 빌립니다. 나중에 끝낸 블록이 이 빚을
 // 먼저 갚기 때문에 벌기 전에 썼는지 후에 썼는지가 결과를 바꾸지 않아요.
+// 저축에서 빌린 양을 돌려줍니다 — 기록을 지울 때 되돌릴 수 있게 소비 기록에
+// 같이 적어둬야 하거든요.
 function chargeToday(delta) {
-  if (delta <= 0) return;
+  if (delta <= 0) return 0;
   const { dailyPool, dailySpent } = computeToday();
   const overflow = Math.max(0, delta - Math.max(0, dailyPool - dailySpent));
   if (overflow > 0) {
@@ -1367,6 +1369,7 @@ function chargeToday(delta) {
     state.savings -= overflow;
     state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) + overflow;
   }
+  return overflow;
 }
 function startSpendTimer(label, cost) {
   if (state.activeSpend) return;
@@ -1390,7 +1393,7 @@ function applyActiveSpendTick() {
   const total = spendElapsedPoints(active);
   const delta = total - (active.appliedPoints || 0);
   if (delta <= 0) return false;
-  chargeToday(delta);
+  const borrowed = chargeToday(delta);
   const day = todayKey();
   const list = state.spendsByDate[day] || [];
   // The running log entry lives on the day the timer started; once the clock
@@ -1400,12 +1403,12 @@ function applyActiveSpendTick() {
   const minutes = Math.max(1, Math.round(spendMinutes(active)));
   if (existing) {
     state.spendsByDate[day] = list.map((e) => (e.id === active.logId
-      ? { ...e, cost: e.cost + delta, at: Date.now(), minutes } : e));
+      ? { ...e, cost: e.cost + delta, borrowed: (e.borrowed || 0) + borrowed, at: Date.now(), minutes } : e));
   } else {
     const id = uid();
     active.logId = id;
     state.spendsByDate[day] = [...list, {
-      id, label: active.label, cost: delta,
+      id, label: active.label, cost: delta, borrowed,
       startedAt: active.startedAt, minutes, at: Date.now(),
     }];
   }
@@ -1457,11 +1460,54 @@ function addManualSpend() {
     .sort((a, b) => spendRange(a).startedAt - spendRange(b).startedAt);
   // 오늘 것은 오늘 몫에서, 이미 정산이 끝난 날 것은 저축에서 바로 뺍니다.
   // 아직 정산 안 된 지난 날은 그날 정산 때 이 기록이 같이 계산됩니다.
-  if (p.day === todayKey()) chargeToday(p.cost);
+  if (p.day === todayKey()) entry.borrowed = chargeToday(p.cost);
   else if (state.processedDates.includes(p.day)) state.savings -= p.cost;
   manualSpendOpen = false;
   drafts.manualSpend = { label: "", cost: "", date: "", time: "", minutes: "" };
   persistAndRender();
+}
+// 소비 기록 지우기. 오늘 몫에서 깎였던 부분은 목록에서 빠지는 것만으로
+// 되돌아오지만(computeToday가 매번 다시 더하니까), 저축에서 빌린 몫은
+// chargeToday가 잔액을 직접 건드렸기 때문에 따로 갚아야 합니다.
+function removeSpend(day, id) {
+  const list = state.spendsByDate[day] || [];
+  const entry = list.find((e) => e.id === id);
+  if (!entry) return;
+  const live = !!state.activeSpend && state.activeSpend.logId === id;
+  const worth = `${entry.minutes != null ? `${entry.minutes}분 · ` : ""}${entry.cost > 0 ? `${entry.cost}점` : "0점"}`;
+  const msg = live
+    ? `"${entry.label}" 소비가 아직 돌아가는 중이에요. 타이머를 끄고 기록(${worth})을 지울까요?`
+    : `"${entry.label}" 기록(${worth})을 지울까요?`;
+  if (!window.confirm(msg)) return;
+  if (live) state.activeSpend = null;
+  state.spendsByDate[day] = list.filter((e) => e.id !== id);
+  if (day === todayKey()) refundSpendBorrow(day, entry);
+  else if (state.processedDates.includes(day)) state.savings += entry.cost;
+  persistAndRender();
+}
+// 이 소비가 저축에서 빌렸던 몫을 원위치시킵니다. 그 사이에 블록이 빚을 먼저
+// 갚아버렸으면 저축은 이미 돌아와 있으니 더 줄 게 없고, 대신 그 블록이
+// "이만큼 갚았다"고 적어둔 양을 깎습니다. 안 그러면 나중에 그 블록을 지울 때
+// 이미 사라진 빚이 되살아나 저축이 한 번 더 빠져요.
+function refundSpendBorrow(day, entry) {
+  // borrowed를 남기기 전에 쌓인 옛 기록은 얼마를 빌렸는지 모릅니다.
+  // 그날 아직 남아 있는 빚 안에서 어림잡아 돌려줘요.
+  const owedBack = entry.borrowed != null
+    ? entry.borrowed
+    : Math.min(entry.cost, state.borrowedByDate[day] || 0);
+  if (owedBack <= 0) return;
+  const outstanding = Math.min(owedBack, state.borrowedByDate[day] || 0);
+  if (outstanding > 0) {
+    state.savings += outstanding;
+    state.borrowedByDate[day] = (state.borrowedByDate[day] || 0) - outstanding;
+  }
+  let alreadyRepaid = owedBack - outstanding;
+  (state.blocksByDate[day] || []).forEach((b) => {
+    if (alreadyRepaid <= 0 || !(b.repaid > 0)) return;
+    const cut = Math.min(b.repaid, alreadyRepaid);
+    b.repaid -= cut;
+    alreadyRepaid -= cut;
+  });
 }
 function useOffDay() {
   if (state.savings < OFFDAY_COST) return;
@@ -2928,6 +2974,7 @@ function renderTodaySummaryColumn() {
             <span class="wl-log-time">${formatTime(item.at)}</span>
             <div class="wl-log-main"><div class="wl-log-label">${escapeHtml(item.label)}</div></div>
             <span class="wl-log-points">${item.cost > 0 ? `-${item.cost}` : "0"}</span>
+            <button class="wl-icon-btn wl-log-del" data-action="removeSpend" data-date="${todayKey()}" data-spend="${item.id}" title="기록 삭제">${ICONS.x}</button>
           </li>`).join("")}
       </ul>
     </section>`;
@@ -4413,6 +4460,7 @@ function runAction(name, ds) {
     case "useOffDay": useOffDay(); break;
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
     case "addSpendPreset": addSpendPreset(); break;
+    case "removeSpend": removeSpend(ds.date, ds.spend); break;
     case "removeSpendPreset": removeSpendPreset(ds.preset); break;
     case "editSpendPreset": startEditSpendPreset(ds.preset); break;
     case "saveEditSpendPreset": saveEditSpendPreset(); break;
