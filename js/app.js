@@ -232,6 +232,10 @@ function defaultState() {
     borrowedByDate: {},
     collapsedWorks: {},
     weeklyGoalCollapsed: false,
+    // 하루가 아니라 주 단위로 세는 이유는, 오전에 시동이 안 걸린 하루가
+    // 그날로 끝나버리지 않게 하기 위해서입니다. 잘 되는 날 더 하고 안 되는
+    // 날 덜 하는 리듬을 벌주지 않아요.
+    weeklyBlockGoal: 20,
     savings: 0,
     processedDates: [],
     offDayLog: [],
@@ -279,6 +283,7 @@ function normalizeState(s) {
   s.borrowedByDate = s.borrowedByDate || {};
   s.collapsedWorks = s.collapsedWorks || {};
   s.weeklyGoalCollapsed = !!s.weeklyGoalCollapsed;
+  s.weeklyBlockGoal = s.weeklyBlockGoal == null ? 20 : Math.max(0, Number(s.weeklyBlockGoal) || 0);
   // 진행 중/대기 구분이 없던 상태에서 넘어올 때는, 최근에 기록이 있던
   // 프로젝트 순으로 한도만큼만 진행 중으로 올려둡니다. 그 뒤로는 수동입니다.
   if (!s.works.some((w) => w.wip !== undefined)) {
@@ -377,6 +382,8 @@ let timerWindow = null;
 const BASE_TITLE = document.title;
 let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
+let editingWeekGoal = false;
+let editingWeekGoalDraft = "";
 
 const drafts = {
   newWorkName: "",
@@ -2685,9 +2692,81 @@ function renderWeeklyGoalCard() {
     </section>`;
 }
 
+// 25분 이하로 끝난 조각은 점수도 0점이라, 블록 수에도 안 넣습니다.
+// 세는 기준이 점수 규칙과 달라지면 "4개 했는데 왜 8점이지"가 생겨요.
+function countedBlock(b) { return blockMinutes(b) > 25; }
+// 주는 월요일에 시작합니다(startOfWeek). 페이스는 평일 기준으로 계산해요 —
+// 주말에 한 블록도 주간 합계에는 들어가지만, "하루 몇 개씩"을 주말로 나누면
+// 실제로 안 쓰는 날에 기대를 걸게 됩니다.
+function weekBlockStats(date = new Date()) {
+  const start = startOfWeek(date);
+  const todayK = todayKey();
+  let week = 0;
+  let today = 0;
+  let daysLeft = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const d = addDays(start, i);
+    const key = todayKey(d);
+    const n = (state.blocksByDate[key] || []).filter(countedBlock).length;
+    week += n;
+    if (key === todayK) today = n;
+    if (key >= todayK && d.getDay() !== 0 && d.getDay() !== 6) daysLeft += 1;
+  }
+  const goal = state.weeklyBlockGoal;
+  return { week, today, daysLeft, goal, left: Math.max(0, goal - week) };
+}
+function weekBlockHint(s) {
+  const today = s.today > 0 ? `오늘 ${s.today}개 · ` : "";
+  if (s.week >= s.goal) return `${today}이번 주 목표 달성`;
+  // 주말에 한 블록도 합계엔 들어갑니다. 다만 "하루 몇 개씩"을 셀 날이 없어요.
+  if (s.daysLeft === 0) return `${today}평일은 끝났어요 · ${s.left}개 모자람`;
+  return `오늘 ${s.today}개 · 남은 ${s.daysLeft}일 하루 ${Math.ceil(s.left / s.daysLeft)}개씩`;
+}
+// 블록을 짜는 자리 바로 위에 둡니다. "하나 더 할까"를 정하는 순간이 여기라서요.
+function renderWeekBlockCard() {
+  const goal = state.weeklyBlockGoal;
+  if (!goal) return "";
+  const s = weekBlockStats();
+  const pct = Math.min(100, Math.round((s.week / goal) * 100));
+  const hit = s.week >= goal;
+  return `
+    <section class="wl-card wl-weekblock">
+      <div class="wl-work-head">
+        <span class="wl-card-title" style="margin-bottom:0">이번 주 블록</span>
+        ${editingWeekGoal ? `
+          <span class="wl-weekblock-edit">
+            주
+            <input class="wl-inline-num" data-draft="weekBlockGoal" value="${escapeAttr(editingWeekGoalDraft)}" inputmode="numeric" data-enter-action="saveWeekBlockGoal" />개
+            <button class="wl-icon-btn" data-action="saveWeekBlockGoal">${ICONS.check}</button>
+            <button class="wl-icon-btn" data-action="cancelWeekBlockGoal">${ICONS.x}</button>
+          </span>`
+        : `<button class="wl-weekblock-count ${hit ? "is-full" : ""}" data-action="editWeekBlockGoal" title="목표 고치기">${s.week}<span class="wl-weekblock-goal">/${goal}</span></button>`}
+      </div>
+      <div class="wl-progress">
+        <div class="wl-progress-bar"><div class="wl-progress-fill ${hit ? "is-save" : ""}" style="width:${pct}%"></div></div>
+      </div>
+      <div class="wl-hint">${weekBlockHint(s)}</div>
+    </section>`;
+}
+function editWeekBlockGoal() {
+  editingWeekGoal = true;
+  editingWeekGoalDraft = String(state.weeklyBlockGoal);
+  render();
+}
+function cancelWeekBlockGoal() { editingWeekGoal = false; render(); }
+function saveWeekBlockGoal() {
+  const n = Number(editingWeekGoalDraft);
+  // 0은 "목표 안 씀"이라 카드가 통째로 사라집니다. 음수나 빈칸은 무시해요.
+  if (!(n >= 0) || editingWeekGoalDraft.trim() === "") { editingWeekGoal = false; render(); return; }
+  state.weeklyBlockGoal = Math.round(n);
+  editingWeekGoal = false;
+  persistAndRender();
+}
+
 function renderTimeBlockColumn(focus = false) {
   const active = state.activeBlock;
   return `
+    ${focus ? "" : renderWeekBlockCard()}
     ${focus ? "" : renderWeeklyGoalCard()}
     <section class="wl-card">
       ${active
@@ -4460,6 +4539,9 @@ function runAction(name, ds) {
     case "useOffDay": useOffDay(); break;
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
     case "addSpendPreset": addSpendPreset(); break;
+    case "editWeekBlockGoal": editWeekBlockGoal(); break;
+    case "saveWeekBlockGoal": saveWeekBlockGoal(); break;
+    case "cancelWeekBlockGoal": cancelWeekBlockGoal(); break;
     case "removeSpend": removeSpend(ds.date, ds.spend); break;
     case "removeSpendPreset": removeSpendPreset(ds.preset); break;
     case "editSpendPreset": startEditSpendPreset(ds.preset); break;
@@ -4641,6 +4723,7 @@ function onRootInput(e) {
     case "editPresetLabel": editingPresetDraft.label = value; break;
     case "editPresetCost": editingPresetDraft.cost = clampNumeric(); break;
     case "editBlockMinutes": editingBlockMinutesDraft = clampNumeric(); break;
+    case "weekBlockGoal": editingWeekGoalDraft = clampNumeric(); break;
     case "pendingUpdateText": drafts.pendingUpdate.text = value; break;
     case "pendingUpdateCostLabel": drafts.pendingUpdate.costLabel = value; break;
     case "pendingUpdateCostAmount": drafts.pendingUpdate.costAmount = clampNumeric(); break;

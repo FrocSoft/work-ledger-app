@@ -744,3 +744,16 @@ body {
 .wl-plan-time-nudge { display: flex; gap: 8px; }
 .wl-plan-time-nudge .wl-btn { flex: 1; padding: 10px 8px; font-size: 13px; }
 .wl-plan-add { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--wl-border); }
+
+/* 이번 주 블록 — 하루가 아니라 주 단위로 세는 목표. 숫자를 눌러 바로 고칩니다. */
+.wl-weekblock .wl-progress { margin: 2px 0 6px; }
+.wl-weekblock-count {
+  font: inherit; font-family: 'IBM Plex Mono', monospace; font-size: 17px; line-height: 1;
+  background: none; border: none; padding: 0; cursor: pointer; color: var(--wl-work);
+}
+.wl-weekblock-count.is-full { color: var(--wl-save); }
+.wl-weekblock-goal { font-size: 12px; color: var(--wl-text-muted); }
+.wl-weekblock-edit {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--wl-text-muted);
+}
