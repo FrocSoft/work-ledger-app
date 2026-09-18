@@ -57,6 +57,8 @@ const ICONS = {
   grip: '<svg class="wl-icon wl-icon--sm wl-grip" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"></circle><circle cx="9" cy="12" r="1.6"></circle><circle cx="9" cy="18" r="1.6"></circle><circle cx="15" cy="6" r="1.6"></circle><circle cx="15" cy="12" r="1.6"></circle><circle cx="15" cy="18" r="1.6"></circle></svg>',
   pencil: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>',
   archive: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"></path><line x1="10" y1="13" x2="14" y2="13"></line></svg>',
+  sun: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>',
+  moon: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>',
   bell: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>',
   pip: '<svg class="wl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"></rect><rect x="12" y="12" width="8" height="6" rx="1" fill="currentColor" stroke="none"></rect></svg>',
   pause: '<svg class="wl-icon wl-icon--sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="9" y1="4" x2="9" y2="20"></line><line x1="15" y1="4" x2="15" y2="20"></line></svg>',
@@ -384,6 +386,21 @@ let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 let editingWeekGoal = false;
 let editingWeekGoalDraft = "";
+
+// 테마는 기기마다 다른 취향이라 state가 아니라 이 브라우저에만 둡니다.
+// (state에 넣으면 폰에서 바꾼 게 노트북까지 따라와요.)
+const THEME_KEY = "workLedger.theme";
+function currentTheme() {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+function toggleTheme() {
+  const next = currentTheme() === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", next === "light" ? "#F1EBE1" : "#1B1917");
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 사파리 비공개 모드 */ }
+  render();
+}
 
 const drafts = {
   newWorkName: "",
@@ -3891,6 +3908,7 @@ function renderShell() {
             ${floatingTimerSupported() ? `
               <button class="wl-icon-btn ${floatingTimerOn ? "is-active" : ""}" data-action="toggleFloatingTimer" title="${floatingTimerOn ? "떠 있는 타이머 닫기" : "타이머를 화면 위에 띄우기"}">${ICONS.pip}</button>
             ` : ""}
+            <button class="wl-icon-btn" data-action="toggleTheme" title="${currentTheme() === "light" ? "어두운 화면으로" : "밝은 화면으로"}">${currentTheme() === "light" ? ICONS.moon : ICONS.sun}</button>
             <button class="wl-icon-btn" data-action="openSettings" title="설정">${ICONS.gear}</button>
           </div>
         </div>
@@ -4553,6 +4571,7 @@ function runAction(name, ds) {
     case "useOffDay": useOffDay(); break;
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
     case "addSpendPreset": addSpendPreset(); break;
+    case "toggleTheme": toggleTheme(); break;
     case "editWeekBlockGoal": editWeekBlockGoal(); break;
     case "saveWeekBlockGoal": saveWeekBlockGoal(); break;
     case "cancelWeekBlockGoal": cancelWeekBlockGoal(); break;
