@@ -1,6 +1,10 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
+/* 테마는 <html data-theme>로 정해집니다. index.html의 짧은 스크립트가
+   그리기 전에 붙여주기 때문에 첫 화면이 깜빡이지 않아요.
+   기본(어두운 쪽)이 :root에 있고, 밝은 쪽이 아래에서 값만 갈아끼웁니다. */
 :root {
+  color-scheme: dark;
   --wl-bg: #1B1917;
   --wl-surface: #221F1B;
   --wl-surface-2: #2A2620;
@@ -11,6 +15,46 @@
   --wl-spend: #C0684A;
   --wl-save: #C9A227;
   --wl-sales: #6E9FB0;
+  /* 누르는 것들의 색. 숫자가 뜻하는 색(work/spend/save/sales)과 따로 둡니다 —
+     둘을 같이 쓰면 "이 주황이 버튼이란 뜻인가 소비란 뜻인가"가 생겨요. */
+  --wl-accent: #8FA876;
+  --wl-on-accent: #17190F;
+  --wl-on-spend: #1B1917;
+  --wl-scrim: rgba(10, 9, 7, 0.72);
+  --wl-scrim-strong: rgba(10, 9, 7, 0.85);
+  --wl-work-soft: rgba(143, 168, 118, 0.18);
+  --wl-work-tint: rgba(143, 168, 118, 0.15);
+  --wl-spend-soft: rgba(192, 104, 74, 0.15);
+  --wl-spend-tint: rgba(192, 104, 74, 0.12);
+  --wl-spend-strong: rgba(192, 104, 74, 0.22);
+}
+
+/* 한 톤 내린 흰색. 순백은 종이 위 검은 글씨보다 눈이 더 피로해서
+   배경을 살짝 눕히고, 누르는 것들만 주황으로 올립니다. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --wl-bg: #F1EBE1;
+  --wl-surface: #FBF7F0;
+  --wl-surface-2: #E9E1D4;
+  --wl-border: #D8CEBD;
+  --wl-text: #2B2620;
+  --wl-text-muted: #6F6759;
+  --wl-work: #4E6B38;
+  --wl-spend: #A33420;
+  --wl-save: #7A5F08;
+  --wl-sales: #336474;
+  /* 흰 글자로 4.6:1 나오는 선까지 주황을 눌렀습니다. 더 밝으면 예쁘지만
+     버튼 글씨가 안 읽혀요. */
+  --wl-accent: #B85416;
+  --wl-on-accent: #FFF8EF;
+  --wl-on-spend: #FFF8EF;
+  --wl-scrim: rgba(43, 38, 32, 0.42);
+  --wl-scrim-strong: rgba(43, 38, 32, 0.72);
+  --wl-work-soft: rgba(78, 107, 56, 0.20);
+  --wl-work-tint: rgba(78, 107, 56, 0.16);
+  --wl-spend-soft: rgba(163, 52, 32, 0.14);
+  --wl-spend-tint: rgba(163, 52, 32, 0.11);
+  --wl-spend-strong: rgba(163, 52, 32, 0.20);
 }
 
 * { box-sizing: border-box; }
@@ -63,7 +107,7 @@ body {
   border-bottom: 2px solid transparent;
   transition: color 0.15s;
 }
-.wl-tab.is-active { color: var(--wl-text); border-bottom-color: var(--wl-work); }
+.wl-tab.is-active { color: var(--wl-text); border-bottom-color: var(--wl-accent); }
 
 /* save status bar */
 .wl-savebar {
@@ -78,7 +122,7 @@ body {
 .wl-savebar--saving, .wl-savebar--pending { display: block; }
 .wl-savebar--error {
   display: block;
-  background: rgba(192, 104, 74, 0.15);
+  background: var(--wl-spend-soft);
   border: 1px solid var(--wl-spend);
   color: var(--wl-text);
 }
@@ -174,7 +218,7 @@ body {
   outline: none;
   min-width: 0;
 }
-.wl-input:focus { border-color: var(--wl-work); }
+.wl-input:focus { border-color: var(--wl-accent); }
 .wl-input--sm { flex: 2; }
 .wl-input--num { flex: 1; font-family: 'IBM Plex Mono', monospace; max-width: 90px; }
 
@@ -205,11 +249,11 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
-.wl-btn--primary { background: var(--wl-work); border-color: var(--wl-work); color: #17190F; font-weight: 600; }
+.wl-btn--primary { background: var(--wl-accent); border-color: var(--wl-accent); color: var(--wl-on-accent); font-weight: 600; }
 .wl-btn--full { width: 100%; }
 .wl-btn--primary:disabled { background: var(--wl-surface-2); border-color: var(--wl-border); color: var(--wl-text-muted); cursor: not-allowed; }
 .wl-btn--ghost { background: none; }
-.wl-btn--danger { background: var(--wl-spend); border-color: var(--wl-spend); color: #1B1917; font-weight: 600; }
+.wl-btn--danger { background: var(--wl-spend); border-color: var(--wl-spend); color: var(--wl-on-spend); font-weight: 600; }
 /* 중단 discards the session, so it deliberately does NOT compete for the eye
    with the buttons beside it — recessed until you go looking for it. */
 .wl-btn--quiet { background: none; border-color: transparent; color: var(--wl-text-muted); }
@@ -217,7 +261,7 @@ body {
 .wl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .wl-icon-btn { background: none; border: none; color: var(--wl-text-muted); cursor: pointer; padding: 4px; display: inline-flex; }
 .wl-icon-btn:hover { color: var(--wl-text); }
-.wl-icon-btn.is-active { color: var(--wl-work); }
+.wl-icon-btn.is-active { color: var(--wl-accent); }
 
 .wl-timer { display: flex; flex-direction: column; align-items: center; text-align: center; }
 .wl-timer-top { display: flex; justify-content: space-between; width: 100%; align-items: center; margin-bottom: 6px; }
@@ -241,7 +285,7 @@ body {
   font: inherit; font-size: 10.5px; padding: 3px 8px; border-radius: 10px; cursor: pointer;
   background: none; border: 1px solid var(--wl-border); color: var(--wl-text-muted); vertical-align: middle;
 }
-.wl-wip-toggle.is-on { border-color: var(--wl-work); color: var(--wl-work); }
+.wl-wip-toggle.is-on { border-color: var(--wl-accent); color: var(--wl-accent); }
 .wl-aging { font-size: 10.5px; color: var(--wl-text-muted); white-space: nowrap; flex: 0 0 auto; }
 .wl-aging.is-stale { color: var(--wl-spend); }
 /* 마감이 일주일 안쪽이거나 지났을 때만 색을 씁니다. 늘 빨갛게 두면 급한 게
@@ -369,7 +413,7 @@ body {
   background: none; display: flex; align-items: center; justify-content: center;
   color: var(--wl-work); cursor: pointer; flex-shrink: 0; padding: 0;
 }
-.wl-checkbox.is-done { background: var(--wl-work); border-color: var(--wl-work); color: #17190F; }
+.wl-checkbox.is-done { background: var(--wl-accent); border-color: var(--wl-accent); color: var(--wl-on-accent); }
 .wl-subtask-name { flex: 1; font-size: 13px; }
 .wl-subtask-name.is-done { color: var(--wl-text-muted); text-decoration: line-through; }
 
@@ -427,7 +471,7 @@ body {
 
 /* settings overlay */
 .wl-settings-overlay {
-  position: fixed; inset: 0; background: rgba(10, 9, 7, 0.72);
+  position: fixed; inset: 0; background: var(--wl-scrim);
   display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px;
 }
 .wl-settings-panel {
@@ -447,13 +491,13 @@ body {
 .wl-settings-actions { display: flex; gap: 8px; margin-top: 16px; }
 .wl-settings-actions .wl-btn { flex: 1; }
 .wl-settings-msg { font-size: 12px; margin-top: 10px; padding: 8px 10px; border-radius: 2px; }
-.wl-settings-msg--error { background: rgba(192, 104, 74, 0.15); border: 1px solid var(--wl-spend); }
-.wl-settings-msg--ok { background: rgba(143, 168, 118, 0.15); border: 1px solid var(--wl-work); }
+.wl-settings-msg--error { background: var(--wl-spend-soft); border: 1px solid var(--wl-spend); }
+.wl-settings-msg--ok { background: var(--wl-work-tint); border: 1px solid var(--wl-work); }
 .wl-reset { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--wl-border); }
 .wl-reset .wl-hint { margin-top: 4px; line-height: 1.5; }
 .wl-reset-warning {
   font-size: 12px; line-height: 1.55; margin-top: 12px; padding: 10px;
-  border-radius: 2px; background: rgba(192, 104, 74, 0.12); border: 1px solid var(--wl-spend);
+  border-radius: 2px; background: var(--wl-spend-tint); border: 1px solid var(--wl-spend);
 }
 
 .wl-loading { padding: 60px 18px; text-align: center; color: var(--wl-text-muted); font-size: 13px; }
@@ -504,7 +548,7 @@ body {
   padding: 3px 6px 3px 10px; border-radius: 12px;
   border: 1px solid var(--wl-border); color: var(--wl-text-muted); background: none;
 }
-.wl-chip.is-action { cursor: pointer; padding: 4px 10px; font-family: inherit; color: var(--wl-work); border-color: var(--wl-work); }
+.wl-chip.is-action { cursor: pointer; padding: 4px 10px; font-family: inherit; color: var(--wl-accent); border-color: var(--wl-accent); }
 .wl-chip .wl-icon-btn { padding: 0; }
 .wl-switch-form {
   width: 100%; margin-top: 10px; padding: 10px; text-align: left;
@@ -535,7 +579,7 @@ body {
 .wl-session-log-tools .wl-session-log-duration { margin-top: 0; }
 .wl-session-log-tools .wl-session-log-duration svg { width: 13px; height: 13px; }
 .wl-session-log-more { font-size: 15px; line-height: 1; color: var(--wl-text-muted); flex-shrink: 0; }
-.wl-session-log-more.is-open { color: var(--wl-work); }
+.wl-session-log-more.is-open { color: var(--wl-accent); }
 .wl-inline-num {
   width: 44px; background: var(--wl-surface-2); border: 1px solid var(--wl-border); color: var(--wl-text);
   font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; padding: 2px 4px; border-radius: 2px;
@@ -552,7 +596,7 @@ body {
 }
 .wl-drag-handle:active { cursor: grabbing; }
 [data-drag-item].is-dragging { opacity: 0.45; }
-[data-drag-item].is-drop-target { outline: 2px solid var(--wl-work); outline-offset: 2px; }
+[data-drag-item].is-drop-target { outline: 2px solid var(--wl-accent); outline-offset: 2px; }
 
 /* continuous session queue */
 .wl-queue-list { list-style: none; margin: 10px 0 0; padding: 0; }
@@ -577,7 +621,7 @@ body {
 
 /* image lightbox */
 .wl-lightbox-overlay {
-  position: fixed; inset: 0; background: rgba(10, 9, 7, 0.85);
+  position: fixed; inset: 0; background: var(--wl-scrim-strong);
   display: flex; align-items: center; justify-content: center; z-index: 60; padding: 24px; cursor: zoom-out;
 }
 .wl-lightbox-img { max-width: min(90vw, 480px); max-height: 80vh; object-fit: contain; border-radius: 4px; }
@@ -648,7 +692,7 @@ body {
   padding: 6px 0; cursor: pointer;
 }
 .wl-goalpick-row[disabled] { opacity: .35; cursor: not-allowed; }
-.wl-goalpick-row.is-on .wl-goalpick-name { color: var(--wl-work); }
+.wl-goalpick-row.is-on .wl-goalpick-name { color: var(--wl-accent); }
 
 /* 습관 — 할일이 아니라 매일의 체크. 진행률 바도 완성도 없습니다. */
 .wl-habit-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -683,7 +727,7 @@ body {
   background: none; border: 1px solid var(--wl-border); border-radius: 3px;
   color: var(--wl-text-muted); font-family: inherit; font-size: 11.5px; cursor: pointer;
 }
-.wl-day-chip.is-on { color: var(--wl-work); border-color: var(--wl-work); }
+.wl-day-chip.is-on { color: var(--wl-accent); border-color: var(--wl-accent); }
 /* 오늘 쉬는 습관은 고치는 중에만 보이고, 체크할 수 없다는 게 드러나야 합니다. */
 .wl-habit-row.is-offday .wl-habit-name { color: var(--wl-text-muted); }
 .wl-checkbox.is-offday { opacity: .3; }
@@ -706,14 +750,14 @@ body {
 .wl-tl-done { background: var(--wl-surface-2); border-left: 2px solid var(--wl-work); }
 /* 소비도 시간을 먹는 행위라 시간축에 길이로 섭니다. 작업과 색으로 갈라둬야
    "오후가 왜 비었나"가 한눈에 읽혀요. */
-.wl-tl-spend { background: rgba(192, 104, 74, 0.12); border-left: 2px solid var(--wl-spend); }
+.wl-tl-spend { background: var(--wl-spend-tint); border-left: 2px solid var(--wl-spend); }
 .wl-tl-spend .wl-tl-time { color: var(--wl-spend); }
-.wl-tl-spend.is-live { background: rgba(192, 104, 74, 0.22); }
-.wl-tl-active { background: rgba(143, 168, 118, 0.18); border-left: 2px solid var(--wl-work); }
+.wl-tl-spend.is-live { background: var(--wl-spend-strong); }
+.wl-tl-active { background: var(--wl-work-soft); border-left: 2px solid var(--wl-work); }
 /* 예정은 아직 안 한 것이라 테두리만 — 한 것과 한눈에 구분돼야 합니다. */
 .wl-tl-plan { border: 1px dashed var(--wl-border); color: var(--wl-text-muted); }
 .wl-tl-plan.is-past { opacity: .45; }
-.wl-tl-plan.is-dragging { border-style: solid; border-color: var(--wl-work); color: var(--wl-text); z-index: 3; }
+.wl-tl-plan.is-dragging { border-style: solid; border-color: var(--wl-accent); color: var(--wl-text); z-index: 3; }
 .wl-tl-grip { color: var(--wl-text-muted); display: inline-flex; cursor: grab; touch-action: none; flex-shrink: 0; }
 .wl-tl-grip svg { width: 13px; height: 13px; }
 /* 현재 시각 선은 눈금일 뿐입니다. 아무것도 실행하지 않아요. */
@@ -731,7 +775,7 @@ body {
   color: inherit; font: inherit; font-size: 11.5px; text-align: left; cursor: pointer;
 }
 .wl-tl-sub { color: var(--wl-text-muted); }
-.wl-tl-plan.is-editing { border-style: solid; border-color: var(--wl-work); color: var(--wl-text); }
+.wl-tl-plan.is-editing { border-style: solid; border-color: var(--wl-accent); color: var(--wl-text); }
 /* 블록 고치기 팝업. 설정창과 같은 껍데기를 쓰되 좁게 — 칸이 몇 개 안 됩니다. */
 .wl-plan-panel { max-width: 380px; }
 .wl-plan-panel .wl-settings-desc { font-family: 'IBM Plex Mono', monospace; }
