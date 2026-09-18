@@ -431,12 +431,25 @@ async function boot() {
     sha = s;
     phase = "ready";
     reconcileSavings();
+    prunePastQueue();
     startTicking();
   } catch (e) {
     phase = "loadError";
     loadErrorMsg = e && e.message ? e.message : "알 수 없는 오류";
   }
   render();
+}
+
+// 시간이 붙은 예정은 그 날짜의 계획입니다. 날이 바뀌면 버려요.
+// 타임라인과 겹침 검사는 시·분만 읽기 때문에, 어제 14시짜리가 남아 있으면
+// 오늘 14시 자리를 차지하고 시작 버튼까지 가져갑니다.
+// 시각을 안 정한 예정은 특정 날의 계획이 아니라서 그대로 둡니다.
+function prunePastQueue() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const before = state.queue.length;
+  state.queue = state.queue.filter((q) => !q.at || q.at >= start.getTime());
+  return state.queue.length !== before;
 }
 
 function reconcileSavings() {
@@ -480,6 +493,7 @@ function onTick() {
   if (Date.now() - lastMinuteCheck > 60000) {
     lastMinuteCheck = Date.now();
     const savingsChanged = reconcileSavings();
+    const queuePruned = prunePastQueue();
     const spendChanged = applyActiveSpendTick();
     // A tab left open past midnight would otherwise keep showing yesterday's
     // "오늘" numbers until something else forces a render.
@@ -488,7 +502,7 @@ function onTick() {
     // window closes rather than sitting there offering a dead button.
     const undoShowing = !!state.cancelledBlock && !state.activeBlock;
     if (undoShowing && !pendingCancelUndo()) state.cancelledBlock = null;
-    if (savingsChanged || spendChanged) persistAndRender();
+    if (savingsChanged || spendChanged || queuePruned) persistAndRender();
     else if (dayChanged || undoShowing) render();
   }
 }
