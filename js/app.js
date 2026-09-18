@@ -397,7 +397,7 @@ function toggleTheme() {
   const next = currentTheme() === "light" ? "dark" : "light";
   document.documentElement.dataset.theme = next;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", next === "light" ? "#F1EBE1" : "#1B1917");
+  if (meta) meta.setAttribute("content", next === "light" ? "#F4F4F2" : "#1B1917");
   try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 사파리 비공개 모드 */ }
   render();
 }
