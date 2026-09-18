@@ -16,11 +16,11 @@
         }
         document.documentElement.dataset.theme = t;
         var m = document.querySelector('meta[name="theme-color"]');
-        if (m) m.setAttribute("content", t === "light" ? "#F1EBE1" : "#1B1917");
+        if (m) m.setAttribute("content", t === "light" ? "#F4F4F2" : "#1B1917");
       } catch (e) { document.documentElement.dataset.theme = "dark"; }
     })();
   </script>
-  <link rel="stylesheet" href="css/style.css?v=20260918c" />
+  <link rel="stylesheet" href="css/style.css?v=20260918d" />
 </head>
 <body>
   <div id="app"></div>
@@ -31,6 +31,6 @@
     <canvas id="wl-pip-canvas" width="480" height="270"></canvas>
     <video id="wl-pip-video" muted playsinline></video>
   </div>
-  <script type="module" src="js/app.js?v=20260918c"></script>
+  <script type="module" src="js/app.js?v=20260918d"></script>
 </body>
 </html>

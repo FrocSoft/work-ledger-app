@@ -29,32 +29,33 @@
   --wl-spend-strong: rgba(192, 104, 74, 0.22);
 }
 
-/* 한 톤 내린 흰색. 순백은 종이 위 검은 글씨보다 눈이 더 피로해서
-   배경을 살짝 눕히고, 누르는 것들만 주황으로 올립니다. */
+/* 밝은 쪽은 쨍하게. 베이지 바탕에 흙색을 얹으면 가을 사진처럼 가라앉아서,
+   바탕은 색기를 뺀 회백색으로 눕히고 카드만 순백으로 띄웠습니다.
+   색은 밝기를 그대로 두고 채도만 올렸어요 — 그래야 대비를 안 잃습니다. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --wl-bg: #F1EBE1;
-  --wl-surface: #FBF7F0;
-  --wl-surface-2: #E9E1D4;
-  --wl-border: #D8CEBD;
-  --wl-text: #2B2620;
-  --wl-text-muted: #6F6759;
-  --wl-work: #4E6B38;
-  --wl-spend: #A33420;
-  --wl-save: #7A5F08;
-  --wl-sales: #336474;
-  /* 흰 글자로 4.6:1 나오는 선까지 주황을 눌렀습니다. 더 밝으면 예쁘지만
-     버튼 글씨가 안 읽혀요. */
-  --wl-accent: #B85416;
-  --wl-on-accent: #FFF8EF;
-  --wl-on-spend: #FFF8EF;
-  --wl-scrim: rgba(43, 38, 32, 0.42);
-  --wl-scrim-strong: rgba(43, 38, 32, 0.72);
-  --wl-work-soft: rgba(78, 107, 56, 0.20);
-  --wl-work-tint: rgba(78, 107, 56, 0.16);
-  --wl-spend-soft: rgba(163, 52, 32, 0.14);
-  --wl-spend-tint: rgba(163, 52, 32, 0.11);
-  --wl-spend-strong: rgba(163, 52, 32, 0.20);
+  --wl-bg: #F4F4F2;
+  --wl-surface: #FFFFFF;
+  --wl-surface-2: #ECECE9;
+  --wl-border: #DCDCD7;
+  --wl-text: #1A1A19;
+  --wl-text-muted: #6B6B66;
+  --wl-work: #0E7A33;
+  --wl-spend: #C81E1E;
+  --wl-save: #8F5A06;
+  --wl-sales: #0A6FB5;
+  /* 채도 100%인 주황 중에 흰 글자가 4.5:1을 넘기는 가장 밝은 값입니다.
+     여기서 더 밝히면 쨍해지는 대신 버튼 글씨가 안 읽혀요. */
+  --wl-accent: #CC4B00;
+  --wl-on-accent: #FFFFFF;
+  --wl-on-spend: #FFFFFF;
+  --wl-scrim: rgba(26, 26, 25, 0.45);
+  --wl-scrim-strong: rgba(26, 26, 25, 0.74);
+  --wl-work-soft: rgba(14, 122, 51, 0.18);
+  --wl-work-tint: rgba(14, 122, 51, 0.14);
+  --wl-spend-soft: rgba(200, 30, 30, 0.13);
+  --wl-spend-tint: rgba(200, 30, 30, 0.10);
+  --wl-spend-strong: rgba(200, 30, 30, 0.19);
 }
 
 * { box-sizing: border-box; }
