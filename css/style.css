@@ -804,3 +804,21 @@ body {
   display: flex; align-items: center; gap: 4px;
   font-size: 11px; color: var(--wl-text-muted);
 }
+
+/* 부채 — 잔액만 적어두는 목록. 줄을 누르면 그 자리에서 고칩니다. */
+.wl-debt-total { font-family: 'IBM Plex Mono', monospace; font-size: 17px; line-height: 1; color: var(--wl-text-muted); }
+.wl-debt-total.is-owed { color: var(--wl-spend); }
+.wl-debt-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; }
+.wl-debt-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; border-bottom: 1px solid var(--wl-border); font-size: 13px;
+}
+.wl-debt-row:last-child { border-bottom: none; }
+.wl-debt-row.is-editing { display: block; }
+.wl-debt-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left;
+  background: none; border: none; padding: 0; cursor: pointer; color: inherit; font: inherit;
+}
+.wl-debt-name { color: var(--wl-text); }
+.wl-debt-note { font-size: 11px; color: var(--wl-text-muted); }
+.wl-debt-amount { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--wl-spend); flex-shrink: 0; }

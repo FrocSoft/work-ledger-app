@@ -233,6 +233,10 @@ function defaultState() {
     spendsByDate: {},
     borrowedByDate: {},
     collapsedWorks: {},
+    // 갚아야 할 돈. 잔액만 들고 있습니다 — 상환 기록도 이자 계산도 안 해요.
+    // 매달 은행 앱에서 숫자 하나 옮겨 적는 건 지켜지지만, 갚을 때마다
+    // 적는 건 안 지켜집니다. 소비 기록이 그랬던 것처럼요.
+    debts: [],
     weeklyGoalCollapsed: false,
     // 하루가 아니라 주 단위로 세는 이유는, 오전에 시동이 안 걸린 하루가
     // 그날로 끝나버리지 않게 하기 위해서입니다. 잘 되는 날 더 하고 안 되는
@@ -284,6 +288,9 @@ function normalizeState(s) {
   s.queue = s.queue || [];
   s.borrowedByDate = s.borrowedByDate || {};
   s.collapsedWorks = s.collapsedWorks || {};
+  s.debts = (s.debts || []).map((d) => ({
+    id: d.id || uid(), name: d.name || "", amount: Math.max(0, Number(d.amount) || 0), note: d.note || "",
+  }));
   s.weeklyGoalCollapsed = !!s.weeklyGoalCollapsed;
   s.weeklyBlockGoal = s.weeklyBlockGoal == null ? 20 : Math.max(0, Number(s.weeklyBlockGoal) || 0);
   // 진행 중/대기 구분이 없던 상태에서 넘어올 때는, 최근에 기록이 있던
@@ -386,6 +393,8 @@ let editingPresetId = null;
 let editingPresetDraft = { label: "", cost: "" };
 let editingWeekGoal = false;
 let editingWeekGoalDraft = "";
+let editingDebtId = null;
+let editingDebtDraft = { name: "", amount: "", note: "" };
 
 // 테마는 기기마다 다른 취향이라 state가 아니라 이 브라우저에만 둡니다.
 // (state에 넣으면 폰에서 바꾼 게 노트북까지 따라와요.)
@@ -415,6 +424,9 @@ const drafts = {
   pendingUpdate: { text: "", image: null, subtaskDone: false, costLabel: "", costAmount: "", extraLinks: [] },
   newRevenueAmount: "",
   newCategoryName: "",
+  newDebtName: "",
+  newDebtAmount: "",
+  newDebtNote: "",
   newTier: {},
   newCost: {},
   switchDraft: { task: "", workId: "", subtaskId: "" },
@@ -3877,10 +3889,100 @@ function renderCategoryManageCard(c, totalRevenue, idx) {
     </section>`;
 }
 
+// ---- 부채 ----
+// 목표 카드보다 위에 둡니다. 갚을 게 있는 상태에서 사고 싶은 것만 보이면
+// 계획이 실제보다 가깝게 느껴져요.
+function debtTotal() {
+  return state.debts.reduce((a, d) => a + d.amount, 0);
+}
+function renderDebtCard() {
+  const total = debtTotal();
+  const editing = editingDebtId;
+  // 작품 몇 점이 이 빚을 덮는지. 재료비는 빼지 않은 숫자라 낙관적인 쪽입니다.
+  const per = netOf(state.avgWorkPrice);
+  const works = total > 0 && per > 0 ? total / per : 0;
+  return `
+    <section class="wl-card">
+      <div class="wl-work-head">
+        <span class="wl-card-title" style="margin-bottom:0">부채</span>
+        <span class="wl-debt-total ${total > 0 ? "is-owed" : ""}">${total > 0 ? `-${formatMoney(total)}` : "없음"}</span>
+      </div>
+      ${total > 0 ? `<div class="wl-hint">${formatMoney(state.avgWorkPrice)}짜리 작품 <b>${works.toFixed(1)}점</b>을 팔면 갚아요 · 재료비는 안 뺀 숫자예요</div>` : ""}
+      ${state.debts.length === 0 ? `<div class="wl-empty">적어둔 부채가 없어요.</div>` : `
+        <ul class="wl-debt-list">
+          ${state.debts.map((d) => (editing === d.id ? `
+            <li class="wl-debt-row is-editing">
+              <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+                <input class="wl-input wl-input--sm" placeholder="어디서 빌렸나" data-draft="editDebtName" value="${escapeAttr(editingDebtDraft.name)}" />
+                <input class="wl-input wl-input--num" placeholder="잔액" inputmode="numeric" data-draft="editDebtAmount" data-enter-action="saveDebt" value="${escapeAttr(editingDebtDraft.amount)}" />
+              </div>
+              <div class="wl-field-row wl-field-row--tight">
+                <input class="wl-input wl-input--sm" placeholder="메모 (금리·만기 등)" data-draft="editDebtNote" data-enter-action="saveDebt" value="${escapeAttr(editingDebtDraft.note)}" />
+                <div class="wl-field-btns">
+                  <button class="wl-icon-btn" data-action="saveDebt">${ICONS.check}</button>
+                  <button class="wl-icon-btn" data-action="cancelDebt">${ICONS.x}</button>
+                </div>
+              </div>
+            </li>` : `
+            <li class="wl-debt-row">
+              <button class="wl-debt-main" data-action="editDebt" data-debt="${d.id}">
+                <span class="wl-debt-name">${escapeHtml(d.name)}</span>
+                ${d.note ? `<span class="wl-debt-note">${escapeHtml(d.note)}</span>` : ""}
+              </button>
+              <span class="wl-debt-amount">${formatMoney(d.amount)}</span>
+              <button class="wl-icon-btn" data-action="removeDebt" data-debt="${d.id}" title="지우기">${ICONS.x}</button>
+            </li>`)).join("")}
+        </ul>`}
+      <div class="wl-field-row wl-field-row--tight wl-field-row--wrap">
+        <input class="wl-input wl-input--sm" placeholder="어디서 빌렸나" data-draft="newDebtName" value="${escapeAttr(drafts.newDebtName)}" />
+        <input class="wl-input wl-input--num" placeholder="잔액" inputmode="numeric" data-draft="newDebtAmount" data-enter-action="addDebt" value="${escapeAttr(drafts.newDebtAmount)}" />
+        <button class="wl-btn wl-btn--ghost" data-action="addDebt">${ICONS.plus}</button>
+      </div>
+    </section>`;
+}
+function addDebt() {
+  const name = drafts.newDebtName.trim();
+  const amount = Number(drafts.newDebtAmount);
+  if (!name || !(amount > 0)) return;
+  state.debts.push({ id: uid(), name, amount: Math.round(amount), note: "" });
+  drafts.newDebtName = "";
+  drafts.newDebtAmount = "";
+  persistAndRender();
+}
+function editDebt(id) {
+  const d = state.debts.find((x) => x.id === id);
+  if (!d) return;
+  editingDebtId = id;
+  editingDebtDraft = { name: d.name, amount: String(d.amount), note: d.note || "" };
+  render();
+}
+function cancelDebt() { editingDebtId = null; render(); }
+function saveDebt() {
+  const d = state.debts.find((x) => x.id === editingDebtId);
+  if (!d) { editingDebtId = null; render(); return; }
+  const amount = Number(editingDebtDraft.amount);
+  const name = editingDebtDraft.name.trim();
+  if (name) d.name = name;
+  // 0은 다 갚았다는 뜻이라 지우지 않고 그대로 둡니다. 지우는 건 X로.
+  if (amount >= 0 && editingDebtDraft.amount.trim() !== "") d.amount = Math.round(amount);
+  d.note = editingDebtDraft.note.trim();
+  editingDebtId = null;
+  persistAndRender();
+}
+function removeDebt(id) {
+  const d = state.debts.find((x) => x.id === id);
+  if (!d) return;
+  if (!window.confirm(`"${d.name}" (${formatMoney(d.amount)})을 목록에서 지울까요?`)) return;
+  state.debts = state.debts.filter((x) => x.id !== id);
+  if (editingDebtId === id) editingDebtId = null;
+  persistAndRender();
+}
+
 function renderGoalsManage() {
   const totalRevenue = state.revenueLog.reduce((a, r) => a + r.amount, 0);
   return `
     <div class="wl-body">
+      ${renderDebtCard()}
       <section class="wl-card">
         <div class="wl-field-row">
           <input class="wl-input" placeholder="새 카테고리 (예: 시계)" data-draft="newCategoryName" data-enter-action="addCategory" value="${escapeAttr(drafts.newCategoryName)}" />
@@ -4572,6 +4674,11 @@ function runAction(name, ds) {
     case "toggleSpendPresetsEdit": toggleSpendPresetsEdit(); break;
     case "addSpendPreset": addSpendPreset(); break;
     case "toggleTheme": toggleTheme(); break;
+    case "addDebt": addDebt(); break;
+    case "editDebt": editDebt(ds.debt); break;
+    case "saveDebt": saveDebt(); break;
+    case "cancelDebt": cancelDebt(); break;
+    case "removeDebt": removeDebt(ds.debt); break;
     case "editWeekBlockGoal": editWeekBlockGoal(); break;
     case "saveWeekBlockGoal": saveWeekBlockGoal(); break;
     case "cancelWeekBlockGoal": cancelWeekBlockGoal(); break;
@@ -4771,6 +4878,11 @@ function onRootInput(e) {
     case "manualMinutes": drafts.manualBlock.minutes = clampNumeric(); updateManualPreview(); break;
     case "newRevenueAmount": drafts.newRevenueAmount = clampNumeric(); break;
     case "newCategoryName": drafts.newCategoryName = value; break;
+    case "newDebtName": drafts.newDebtName = value; break;
+    case "newDebtAmount": drafts.newDebtAmount = clampNumeric(); break;
+    case "editDebtName": editingDebtDraft.name = value; break;
+    case "editDebtAmount": editingDebtDraft.amount = clampNumeric(); break;
+    case "editDebtNote": editingDebtDraft.note = value; break;
     case "editCategoryName": editingCategoryDraft = value; break;
     case "tierLabel": {
       const catId = el.dataset.cat;
